@@ -1,0 +1,1898 @@
+/**
+ * Cloudflare Worker: 全家好习惯打卡一体化服务 (静态网页 + KV 数据库 API)
+ * 纯网页复制粘贴即可部署，无需 Git，无需任何命令行工具！
+ */
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // 1. 处理 API 云端数据同步接口 (/api/sync)
+    if (url.pathname === '/api/sync') {
+      const corsHeaders = {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      };
+
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { headers: corsHeaders });
+      }
+
+      const channel = url.searchParams.get('channel') || 'fute_family_default';
+      const kvKey = `daka_data_${channel}`;
+      const kv = env.DAKA_KV || env.KV;
+
+      if (!kv) {
+        return new Response(JSON.stringify({
+          code: 500,
+          error: '未绑定 KV 命名空间！请在 Worker 的【设置 (Settings)】->【变量与机密 (Variables)】->【KV 命名空间绑定】添加变量名为 DAKA_KV'
+        }), { status: 500, headers: corsHeaders });
+      }
+
+      try {
+        if (request.method === 'GET') {
+          const data = await kv.get(kvKey, { type: 'json' });
+          return new Response(JSON.stringify({ code: 0, data }), { headers: corsHeaders });
+        }
+
+        if (request.method === 'POST') {
+          const body = await request.json();
+          if (body && body.kids) {
+            await kv.put(kvKey, JSON.stringify(body));
+          }
+          return new Response(JSON.stringify({ code: 0, message: 'saved' }), { headers: corsHeaders });
+        }
+
+        return new Response(JSON.stringify({ code: 405, message: 'Method Not Allowed' }), {
+          status: 405,
+          headers: corsHeaders
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ code: 500, error: err.message }), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+
+    // 2. 默认输出完整的打卡 App 界面
+    return new Response(HTML_CONTENT, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=1800'
+      }
+    });
+  }
+};
+
+// 完整打卡 App HTML 代码 (包含家长审计日志、PIN 码安全锁、成就宝箱管理)
+const HTML_CONTENT = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  
+  <!-- iOS PWA 苹果桌面图标与全屏模式标准配置 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="打卡宝">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#4f46e5">
+
+  <title>宝贝成长打卡</title>
+  
+  <!-- 核心样式与动效库 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+  <style>
+    body {
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+      background: #090d16;
+    }
+    .safe-top { padding-top: max(env(safe-area-inset-top, 20px), 16px); }
+    .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom, 20px), 16px); }
+    
+    .task-bounce {
+      transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .task-bounce:active {
+      transform: scale(0.97);
+    }
+
+    /* 满星酷炫充能发光动效 */
+    @keyframes glowPulse {
+      0% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.5), inset 0 0 8px rgba(255, 255, 255, 0.8); }
+      50% { box-shadow: 0 0 25px rgba(245, 158, 11, 0.9), 0 0 45px rgba(251, 191, 36, 0.6), inset 0 0 15px rgba(255, 255, 255, 1); }
+      100% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.5), inset 0 0 8px rgba(255, 255, 255, 0.8); }
+    }
+
+    @keyframes streamLight {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .energy-charged-bar {
+      background: linear-gradient(90deg, #f59e0b, #fbbf24, #fff, #f59e0b, #ef4444);
+      background-size: 300% 300%;
+      animation: streamLight 2s infinite linear, glowPulse 1.5s infinite ease-in-out;
+    }
+
+    .energy-charged-box {
+      animation: floatBox 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes floatBox {
+      0% { transform: translateY(0px) scale(1); filter: drop-shadow(0 8px 16px rgba(245, 158, 11, 0.4)); }
+      100% { transform: translateY(-6px) scale(1.03); filter: drop-shadow(0 14px 24px rgba(245, 158, 11, 0.7)); }
+    }
+  </style>
+</head>
+<body class="flex justify-center items-center min-h-screen p-0 sm:p-4">
+
+  <!-- 模拟 iPhone 视口容器 (手机全屏，PC端精致外壳) -->
+  <div class="w-full max-w-md h-[100dvh] sm:h-[870px] bg-slate-50 sm:rounded-[44px] shadow-2xl flex flex-col overflow-hidden relative border-0 sm:border-8 sm:border-slate-800">
+    
+        <!-- 顶部状态栏 -->
+    <div class="safe-top bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-4 pt-3 pb-3 shadow-md relative z-10">
+      
+      <!-- 顶栏微小信息行：日期与云端状态分居两侧，绝不折行拥挤 -->
+      <div class="flex items-center justify-between text-[11px] text-white/80 pb-1.5 mb-1.5 border-b border-white/10">
+        <div class="flex items-center gap-1.5 font-medium tracking-wide">
+          <i class="fa-regular fa-calendar text-[10px] opacity-75"></i>
+          <span id="current-date-text">--月--日 周-</span>
+        </div>
+        <div class="flex items-center gap-1.5 text-[10px] bg-black/20 px-2 py-0.5 rounded-full backdrop-blur-xs font-medium">
+          <span id="cloud-pulse-dot" class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="cloud-sync-status">云端已同步</span>
+        </div>
+      </div>
+
+      <!-- 顶栏主要标题与操作按钮：强制 whitespace-nowrap 不换行折行 -->
+      <div class="flex justify-between items-center mb-2.5 gap-2">
+        <h1 class="text-base font-extrabold tracking-tight flex items-center gap-1.5 whitespace-nowrap">
+          <span>🌟 宝贝成长自律打卡</span>
+        </h1>
+        
+        <!-- 家长权限动态按钮组 -->
+        <div class="flex items-center gap-1.5 shrink-0" id="parent-btn-group">
+          <button id="parent-auth-btn" onclick="openPinModal()" class="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 backdrop-blur-md active:scale-95 px-3 py-1.5 rounded-full transition font-semibold whitespace-nowrap shrink-0">
+            <i class="fa-solid fa-lock"></i>
+            <span>家长模式</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 孩子切换标签 (付成蹊 / 付天曜) -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-black/20 rounded-2xl backdrop-blur-md">
+        <button id="kid-btn-1" onclick="switchKid(1)" class="flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all bg-white text-indigo-700 shadow-sm">
+          <span class="text-base">👦</span>
+          <span id="kid-label-1">付成蹊</span>
+          <span id="star-count-1" class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">⭐ 0</span>
+        </button>
+        <button id="kid-btn-2" onclick="switchKid(2)" class="flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all text-white/80 hover:text-white">
+          <span class="text-base">👶</span>
+          <span id="kid-label-2">付天曜</span>
+          <span id="star-count-2" class="text-xs bg-white/20 px-2 py-0.5 rounded-full font-bold">⭐ 0</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 中间主视图滚动区域 -->
+    <div class="flex-1 overflow-y-auto p-4 space-y-4" id="main-content-scroll">
+
+      <!-- ================= 视图 1：今日打卡 ================= -->
+      <div id="view-today" class="space-y-4">
+        
+        <!-- 【酷炫心愿能量条 & 礼物盒充能卡片】 -->
+        <div id="wish-card-container" class="bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100/50 border border-amber-200/90 rounded-3xl p-4 shadow-sm relative overflow-hidden transition-all duration-500">
+          
+          <div class="flex justify-between items-start mb-2 relative z-10">
+            <div>
+              <span class="text-[11px] font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5">
+                <i class="fa-solid fa-crown text-amber-500"></i> 当前心愿目标
+              </span>
+              <h3 class="font-black text-slate-800 text-base mt-0.5 flex items-center gap-1.5" id="wish-title">
+                <span>心愿目标</span> 🎁
+              </h3>
+            </div>
+            <div class="text-right">
+              <span class="text-2xl font-black text-amber-600" id="current-stars-display">0</span>
+              <span class="text-xs text-slate-400 font-bold">/ <span id="target-stars-display">30</span> 颗</span>
+            </div>
+          </div>
+
+          <!-- 充能进度条轨道 -->
+          <div class="w-full bg-amber-200/50 rounded-full h-4 p-0.5 relative z-10 overflow-hidden shadow-inner">
+            <div id="star-progress-bar" class="h-3 rounded-full transition-all duration-700 bg-gradient-to-r from-amber-400 to-orange-500" style="width: 0%"></div>
+          </div>
+
+          <div class="flex justify-between items-center mt-2.5 text-[11px] font-semibold relative z-10">
+            <span id="star-hint-text" class="text-amber-800">🌟 坚持每天做完任务打卡，向礼物冲刺！</span>
+            <span class="text-xs font-black text-orange-600 bg-white/70 px-2 py-0.5 rounded-full border border-amber-200/60" id="star-percentage">0%</span>
+          </div>
+
+          <!-- 满星激活的 3D 礼物盒揭晓区 -->
+          <div id="gift-unlock-area" class="mt-4 pt-3 border-t border-amber-200/70 hidden text-center space-y-2">
+            <div class="energy-charged-box inline-block cursor-pointer" onclick="claimReward()">
+              <div class="w-20 h-20 mx-auto bg-gradient-to-tr from-amber-400 via-rose-500 to-yellow-300 rounded-3xl p-1 shadow-lg flex items-center justify-center transform hover:scale-105 transition">
+                <span class="text-4xl">🎁</span>
+              </div>
+            </div>
+            <div>
+              <span class="inline-block px-3 py-1 bg-gradient-to-r from-amber-500 to-red-500 text-white text-xs font-extrabold rounded-full shadow-md animate-bounce">
+                🎉 能量满溢！点击领取心愿礼物
+              </span>
+              <p class="text-[11px] text-amber-800 font-medium mt-1">恭喜达成目标！点击后礼物将存入下方心愿宝箱，明天开启新一轮积星~</p>
+            </div>
+          </div>
+
+          <!-- 背景透光大金星 -->
+          <span class="absolute -right-3 -bottom-4 text-7xl text-amber-300/30 select-none pointer-events-none">⭐</span>
+        </div>
+
+        <!-- 【已收集的礼物宝箱橱窗 (累积勋章)】 -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+          <div class="flex justify-between items-center mb-2.5">
+            <div class="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              <span class="text-base">🏆</span>
+              <span>荣誉成就宝箱</span>
+              <span class="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded-full" id="gift-badge-count">已集齐 0 个</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] text-slate-400">见证每一次努力</span>
+              <button id="gift-manage-quick-btn" onclick="openParentModal()" class="text-[10px] text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full font-bold hidden transition">
+                <i class="fa-solid fa-pen"></i> 管理
+              </button>
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-2" id="gift-showcase">
+            <!-- 动态渲染已获得的礼物盒勋章 -->
+          </div>
+        </div>
+
+        <!-- 今日周几及任务进度概览 -->
+        <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-100 flex items-center justify-between">
+          <div>
+            <div class="text-xs text-slate-400 flex items-center gap-1 font-medium">
+              <i class="fa-regular fa-calendar-check"></i> 今日排期任务
+              <span class="bg-indigo-50 text-indigo-600 px-1.5 py-0.2 rounded text-[10px] font-semibold" id="today-day-tag">今日计划</span>
+            </div>
+            <div class="text-base font-black text-slate-800 mt-1" id="daily-completion-text">已完成 0 / 0 项</div>
+          </div>
+          <div id="daily-star-reward" class="text-right">
+            <span class="text-[11px] text-slate-400 block font-medium">今日已赚</span>
+            <span class="text-sm font-extrabold text-amber-600 flex items-center justify-end gap-1">
+              <span>+0</span> <i class="fa-solid fa-star text-xs"></i>
+            </span>
+          </div>
+        </div>
+
+        <!-- 任务卡片列表 -->
+        <div class="space-y-2.5" id="task-list">
+          <!-- 动态渲染今日生效任务 -->
+        </div>
+
+        <!-- 家长专享：今日打卡底部操作审计日志入口 -->
+        <div id="parent-audit-log-bottom-btn-today" class="pt-2 pb-2 hidden">
+          <button onclick="openAuditLogModal()" class="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl shadow-sm transition flex items-center justify-between text-xs font-bold border border-slate-700/50">
+            <div class="flex items-center gap-2.5">
+              <span class="w-7 h-7 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center text-sm">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+              </span>
+              <div class="text-left">
+                <div class="text-white">查看家长操作审计日志</div>
+                <div class="text-[10px] text-slate-400 font-normal">追溯打卡、补卡、任务与宝箱增删改历史</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 text-slate-300 text-[11px]">
+              <span id="audit-log-count-badge-today" class="bg-indigo-500 text-white font-bold px-2 py-0.5 rounded-full text-[10px]">0 条</span>
+              <i class="fa-solid fa-chevron-right text-[10px]"></i>
+            </div>
+          </button>
+        </div>
+
+      </div>
+
+      <!-- ================= 视图 2：打卡日历 (星星历史与补卡) ================= -->
+      <div id="view-calendar" class="space-y-4 hidden">
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+          
+          <!-- 月份选择与切换 (无感平滑切换) -->
+          <div class="flex justify-between items-center mb-3">
+            <div>
+              <h2 class="font-bold text-slate-800 text-base" id="cal-month-title">2026年 11月</h2>
+              <span class="text-[11px] text-slate-400">每天获得的星星一览无余</span>
+            </div>
+            <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+              <button onclick="changeCalMonth(-1)" class="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-slate-600 shadow-xs hover:bg-slate-50"><i class="fa-solid fa-chevron-left text-xs"></i></button>
+              <button onclick="changeCalMonth(1)" class="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-slate-600 shadow-xs hover:bg-slate-50"><i class="fa-solid fa-chevron-right text-xs"></i></button>
+            </div>
+          </div>
+
+          <!-- 星期头 -->
+          <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-slate-400 mb-2">
+            <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+          </div>
+
+          <!-- 日期网格 (星标日历) -->
+          <div class="grid grid-cols-7 gap-1.5 text-center" id="calendar-grid">
+            <!-- 动态渲染 -->
+          </div>
+
+          <!-- 图例说明 -->
+          <div class="flex items-center justify-around text-[11px] text-slate-500 mt-4 pt-3 border-t border-slate-100">
+            <span class="flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> 全部完成 (⭐满星)
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span> 部分打卡 (⭐+1)
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-slate-200"></span> 未打卡
+            </span>
+          </div>
+        </div>
+
+        <!-- 选中日期的明细卡片 -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+          <div class="flex justify-between items-center mb-3">
+            <div>
+              <span class="font-bold text-slate-800 text-sm" id="selected-date-detail">--月--日 明细</span>
+              <span class="text-xs text-amber-600 font-bold ml-2" id="selected-date-stars">⭐ 获得 0 颗星</span>
+            </div>
+            <span id="history-mode-tag" class="text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+              <i class="fa-solid fa-lock text-xs"></i> 历史只读 (家长模式可修改)
+            </span>
+          </div>
+          <div class="space-y-2" id="detail-list">
+            <!-- 渲染选定日期的打卡明细 -->
+          </div>
+
+        <!-- 家长专享：日历底部操作审计日志入口 -->
+        <div id="parent-audit-log-bottom-btn-cal" class="pt-2 pb-2 hidden">
+          <button onclick="openAuditLogModal()" class="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl shadow-sm transition flex items-center justify-between text-xs font-bold border border-slate-700/50">
+            <div class="flex items-center gap-2.5">
+              <span class="w-7 h-7 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center text-sm">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+              </span>
+              <div class="text-left">
+                <div class="text-white">查看家长操作审计日志</div>
+                <div class="text-[10px] text-slate-400 font-normal">追溯打卡、补卡、任务与宝箱增删改历史</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 text-slate-300 text-[11px]">
+              <span id="audit-log-count-badge-cal" class="bg-indigo-500 text-white font-bold px-2 py-0.5 rounded-full text-[10px]">0 条</span>
+              <i class="fa-solid fa-chevron-right text-[10px]"></i>
+            </div>
+          </button>
+        </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 底部原生风格导航栏 -->
+    <div class="safe-bottom bg-white border-t border-slate-100 px-8 py-2 flex justify-around items-center relative z-10">
+      <button id="nav-today" onclick="switchNav('today')" class="flex flex-col items-center gap-1 text-indigo-600 font-medium">
+        <i class="fa-solid fa-calendar-check text-xl"></i>
+        <span class="text-[11px]">今日打卡</span>
+      </button>
+      <button id="nav-calendar" onclick="switchNav('calendar')" class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-medium">
+        <i class="fa-regular fa-calendar-days text-xl"></i>
+        <span class="text-[11px]">打卡日历 & 星星</span>
+      </button>
+    </div>
+
+    <!-- ================= 孩子打卡二次确认锁定弹窗 ================= -->
+    <div id="checkin-confirm-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="bg-white rounded-3xl w-full max-w-xs p-6 shadow-2xl text-center space-y-4 transform transition-all">
+        <div class="w-14 h-14 bg-gradient-to-tr from-indigo-500 to-purple-500 text-white rounded-2xl flex items-center justify-center mx-auto text-2xl shadow-lg shadow-indigo-200">
+          <i class="fa-solid fa-medal"></i>
+        </div>
+        <div>
+          <h3 class="font-extrabold text-slate-800 text-base">确认完成打卡？</h3>
+          <p class="text-xs text-slate-500 mt-1.5 leading-relaxed">
+            小朋友，你确定已经认真做完了<br>
+            <span class="font-bold text-indigo-600 text-sm" id="confirm-task-name">【--】</span> 吗？
+          </p>
+          <div class="bg-amber-50 text-amber-800 text-[11px] font-semibold p-2 rounded-xl mt-3 flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-lock text-xs"></i>
+            <span>确认提交后将永久锁定，不能再修改哦！</span>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 pt-1">
+          <button onclick="closeCheckinConfirm()" class="py-2.5 rounded-xl text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition">
+            再检查下
+          </button>
+          <button onclick="executeConfirmCheckin()" class="py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 shadow-md shadow-indigo-200 transition flex items-center justify-center gap-1">
+            <span>确认打卡</span>
+            <i class="fa-solid fa-star text-amber-300 text-xs"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 家长 PIN 码安全弹窗 (密码 1234，无泄密提示) ================= -->
+    <div id="pin-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="bg-white rounded-3xl w-full max-w-xs p-6 shadow-2xl text-center space-y-4">
+        <div class="w-12 h-12 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl shadow-xs">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <div>
+          <h3 class="font-bold text-slate-800 text-base">请输入家长管理密码</h3>
+          <p class="text-xs text-slate-400 mt-1">解锁后可补卡及修改任务与心愿</p>
+        </div>
+        <div class="flex flex-col items-center gap-1.5">
+          <input type="password" maxlength="4" id="pin-input" class="tracking-[0.8em] text-center text-2xl font-black w-44 h-12 border-2 border-slate-200 rounded-2xl focus:outline-none focus:border-amber-500 bg-slate-50 transition" placeholder="••••">
+          <span id="pin-error-tip" class="text-xs text-rose-500 font-semibold hidden">密码错误，请重试</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 pt-2">
+          <button onclick="closePinModal()" class="py-2.5 rounded-xl text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200">取消</button>
+          <button onclick="verifyPin()" class="py-2.5 rounded-xl text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 shadow-sm shadow-amber-200">确认解锁</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 家长管理面板 (增、删、改、查、周周期、心愿目标、云同步设置) ================= -->
+    <div id="parent-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 hidden">
+      <div class="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        <!-- 弹窗顶栏 -->
+        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div>
+            <h3 class="font-bold text-slate-800 text-base flex items-center gap-1.5">
+              <i class="fa-solid fa-gear text-indigo-600"></i> 家长项目设置
+            </h3>
+            <span class="text-xs text-slate-400" id="parent-current-kid-text">管理【付成蹊 (哥哥)】的任务与心愿</span>
+          </div>
+          <button onclick="closeParentModal()" class="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center hover:bg-slate-300">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- 弹窗可滚动主体 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+          
+          <!-- 1. 心愿与目标星星设置 -->
+          <div class="space-y-2">
+            <label class="text-xs font-bold text-slate-700 flex items-center gap-1">
+              <span>🎁 当前心愿名称与目标星数</span>
+            </label>
+            <div class="grid grid-cols-3 gap-2">
+              <input type="text" id="input-wish-name" class="col-span-2 text-xs border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-600" value="乐高机械组积木套装">
+              <div class="flex items-center gap-1">
+                <input type="number" id="input-wish-target" class="w-full text-xs border border-slate-200 rounded-xl px-2 py-2 text-center focus:outline-none focus:border-indigo-600" value="30">
+                <span class="text-xs text-slate-500 font-bold">颗</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. 打卡任务管理 (增、删、改、周周期排期) -->
+          <div class="space-y-3">
+            <div class="flex justify-between items-center">
+              <label class="text-xs font-bold text-slate-700 flex items-center gap-1">
+                <span>📋 打卡任务清单 (支持按周配置与修改)</span>
+              </label>
+              <button onclick="showTaskForm()" class="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1">
+                <i class="fa-solid fa-plus"></i> 新增任务
+              </button>
+            </div>
+
+            <!-- 任务编辑/新增表单 -->
+            <div id="task-edit-form" class="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3 space-y-3 hidden">
+              <div class="flex justify-between items-center">
+                <span class="text-xs font-bold text-indigo-900" id="form-action-title">✨ 新增打卡项目</span>
+                <input type="hidden" id="editing-task-id" value="">
+              </div>
+              <input type="text" id="task-input-name" placeholder="任务名称，如：练钢琴、写字练字、数学计算" class="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white">
+              <input type="text" id="task-input-desc" placeholder="任务描述/要求，如：30分钟练习曲、口算100道" class="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white">
+              
+              <!-- 周周期选择按钮 -->
+              <div>
+                <span class="text-[11px] text-slate-500 font-medium block mb-1.5">生效周期（按周勾选生效日）：</span>
+                <div class="grid grid-cols-7 gap-1" id="weekdays-selector">
+                  <button type="button" data-day="1" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">一</button>
+                  <button type="button" data-day="2" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">二</button>
+                  <button type="button" data-day="3" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">三</button>
+                  <button type="button" data-day="4" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">四</button>
+                  <button type="button" data-day="5" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">五</button>
+                  <button type="button" data-day="6" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">六</button>
+                  <button type="button" data-day="0" onclick="toggleWeekDay(this)" class="day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white">日</button>
+                </div>
+              </div>
+
+              <div class="flex justify-end gap-2 pt-1">
+                <button onclick="hideTaskForm()" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-500 bg-white">取消</button>
+                <button onclick="saveTaskForm()" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-indigo-600">保存设置</button>
+              </div>
+            </div>
+
+            <!-- 当前任务列表 -->
+            <div class="space-y-2" id="parent-task-list">
+              <!-- 动态呈现任务项 -->
+            </div>
+          </div>
+
+          <!-- 3. 荣誉成就宝箱管理 (增、删、改) -->
+          <div class="space-y-3 pt-2 border-t border-slate-100">
+            <div class="flex justify-between items-center">
+              <label class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <i class="fa-solid fa-trophy text-amber-500"></i>
+                <span>荣誉成就宝箱管理</span>
+              </label>
+              <button onclick="showGiftForm()" class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 border border-amber-200 transition">
+                <i class="fa-solid fa-plus"></i> 补录心愿礼物
+              </button>
+            </div>
+
+            <!-- 礼物编辑/补录表单 -->
+            <div id="gift-edit-form" class="bg-amber-50/70 border border-amber-200 rounded-2xl p-3 space-y-3 hidden">
+              <div class="flex justify-between items-center">
+                <span class="text-xs font-bold text-amber-900" id="gift-form-action-title">🎁 补录心愿礼物</span>
+                <input type="hidden" id="editing-gift-id" value="">
+              </div>
+              <input type="text" id="gift-input-name" placeholder="礼物名称，如：乐高机械组积木套装、迪士尼门票" class="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white">
+              <div class="flex items-center gap-2">
+                <span class="text-[11px] text-slate-500 shrink-0 font-medium">兑换日期：</span>
+                <input type="date" id="gift-input-date" class="flex-1 text-xs border border-slate-200 rounded-xl px-3 py-1.5 bg-white font-mono">
+              </div>
+              <div class="flex justify-end gap-2 pt-1">
+                <button onclick="hideGiftForm()" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-500 bg-white">取消</button>
+                <button onclick="saveGiftForm()" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700">保存礼物</button>
+              </div>
+            </div>
+
+            <!-- 当前礼物列表 -->
+            <div class="space-y-2" id="parent-gift-list">
+              <!-- 动态呈现礼物项 -->
+            </div>
+          </div>
+
+          <!-- 3. Cloudflare 全球边缘 KV 自动同步 -->
+          <div class="bg-indigo-50/50 border border-indigo-200/80 rounded-2xl p-3.5 text-xs space-y-3">
+            <div class="font-bold text-slate-800 flex items-center justify-between">
+              <span class="flex items-center gap-1.5"><i class="fa-solid fa-cloud text-indigo-600"></i> Cloudflare Pages 边缘 KV 同步</span>
+              <span class="text-xs font-semibold" id="cloud-connection-label">
+                <i class="fa-solid fa-circle-notch fa-spin text-amber-500"></i> 检测中
+              </span>
+            </div>
+            <p class="text-slate-500 text-[11px] leading-relaxed">
+              部署在 Cloudflare 后<b>全自动直连云端边缘 KV 数据库，全家免配任何 Key</b>！全家手机只要输入相同的【家庭频道码】，数据实时双向同步：
+            </p>
+            <div class="flex gap-2">
+              <input type="text" id="sync-channel-input" placeholder="家庭频道码 (默认: fute_family)" class="flex-1 text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white font-mono font-bold text-indigo-600">
+              <button onclick="saveSyncChannel()" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-xs transition">
+                绑定并同步
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        
+        <!-- 弹窗底栏 -->
+        <div class="p-3 border-t border-slate-100 bg-white flex flex-col gap-2">
+          <button type="button" onclick="openAuditLogModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-clock-rotate-left text-indigo-600"></i>
+            <span>查看家长操作审计日志</span>
+            <span id="audit-log-count-badge-modal" class="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full">0</span>
+          </button>
+          <button onclick="closeParentModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700">
+            完成并保存设置
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 自动淡出轻量微提示 (零阻断任何操作) -->
+    <div id="toast-tip" class="fixed bottom-16 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white text-xs font-semibold px-4 py-2 rounded-2xl shadow-xl transition-all duration-300 opacity-0 pointer-events-none z-50 flex items-center gap-2">
+      <span id="toast-icon">✨</span>
+      <span id="toast-text">提示内容</span>
+    </div>
+
+  </div>
+
+  <script>
+    // 注册 PWA Service Worker (支持离线启动和秒开)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => {
+          console.log('SW registration note:', err);
+        });
+      });
+    }
+
+    const weekNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    
+    // 获取当天的真实时间
+    const now = new Date();
+    const currentYearVal = now.getFullYear();
+    const currentMonthVal = now.getMonth(); // 0-11
+    const currentDayVal = now.getDate();
+    const currentDayIndex = now.getDay(); // 0 is Sunday
+
+    // 默认初始数据模型
+    const defaultData = {
+      isParentMode: false,
+      currentKid: 1,
+      currentNav: 'today',
+      selectedCalDay: currentDayVal,
+      currentYear: currentYearVal,
+      currentMonth: currentMonthVal,
+      channelKey: 'fute_family',
+      memfire: {
+        url: '',
+        key: ''
+      },
+            kids: {
+        1: {
+          name: "付成蹊 (哥哥)",
+          stars: 0,
+          wish: "乐高机械组积木套装",
+          targetStars: 30,
+          gifts: [],
+          tasks: [
+            { id: 101, title: '练钢琴', sub: '30分钟 • 拜厄基础与练习曲', days: [1, 2, 3, 4, 5, 6, 0], icon: 'fa-music', iconBg: 'bg-rose-500', doneToday: false, time: null },
+            { id: 102, title: '写字练字', sub: '规范硬笔书法练习 1 页', days: [1, 3, 5, 0], icon: 'fa-pen-nib', iconBg: 'bg-amber-500', doneToday: false, time: null },
+            { id: 103, title: '数学口算', sub: '100道天天练速算挑战', days: [1, 2, 3, 4, 0], icon: 'fa-calculator', iconBg: 'bg-blue-500', doneToday: false, time: null }
+          ],
+          history: {}
+        },
+        2: {
+          name: "付天曜 (弟弟)",
+          stars: 0,
+          wish: "变形金刚大黄蜂玩具",
+          targetStars: 25,
+          gifts: [],
+          tasks: [
+            { id: 201, title: '规范描红写字', sub: '笔画描红练习 1 页', days: [1, 2, 3, 4, 5, 6, 0], icon: 'fa-pen-nib', iconBg: 'bg-amber-500', doneToday: false, time: null },
+            { id: 202, title: '趣味数学启蒙', sub: '逻辑思维卡片 15 分钟', days: [2, 4, 6, 0], icon: 'fa-shapes', iconBg: 'bg-indigo-500', doneToday: false, time: null },
+            { id: 203, title: '英文绘本阅读', sub: '绘本自主朗读 1 本', days: [1, 2, 3, 4, 5, 6, 0], icon: 'fa-book-open', iconBg: 'bg-emerald-500', doneToday: false, time: null }
+          ],
+          history: {}
+        }
+      }
+    };
+
+    // 本地持久化加载
+    function loadAppState() {
+      const saved = localStorage.getItem('daka_family_state');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          parsed.currentYear = currentYearVal;
+          parsed.currentMonth = currentMonthVal;
+          parsed.selectedCalDay = currentDayVal;
+          parsed.isParentMode = false;
+          if (parsed.kids && parsed.kids[1] && parsed.kids[1].stars > 10 && !parsed.kids[1].gifts.length) { parsed.kids[1].stars = 0; if (parsed.kids[2]) parsed.kids[2].stars = 0; }
+          if (!parsed.memfire) parsed.memfire = { url: '', key: '' };
+          return parsed;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      return defaultData;
+    }
+
+    const appState = loadAppState();
+
+    // 格式化今日日期
+    const todayStr = \`\${currentYearVal}-\${String(currentMonthVal + 1).padStart(2, '0')}-\${String(currentDayVal).padStart(2, '0')}\`;
+    document.getElementById('current-date-text').innerText = \`\${currentMonthVal + 1}月\${currentDayVal}日 \${weekNames[currentDayIndex]}\`;
+    document.getElementById('today-day-tag').innerText = \`\${weekNames[currentDayIndex]}计划\`;
+
+    [1, 2].forEach(kId => {
+      if (!appState.kids[kId].history[todayStr]) {
+        appState.kids[kId].history[todayStr] = { stars: 0, doneTasks: [] };
+      }
+    });
+
+    // 持久化保存并触发 Cloudflare 全球边缘数据库同步
+    function saveAppState() {
+      localStorage.setItem('daka_family_state', JSON.stringify(appState));
+      pushToCloudflareKV();
+    }
+
+    // ================= Cloudflare Pages 边缘 KV 原生极速同步引擎 =================
+    function updateCloudStatus(status, text) {
+      const dot = document.getElementById('cloud-pulse-dot');
+      const label = document.getElementById('cloud-sync-status');
+      const modalLabel = document.getElementById('cloud-connection-label');
+
+      if (status === 'online') {
+        if (dot) dot.className = "inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+        if (label) label.innerText = text || "云端已同步 (Cloudflare Pages)";
+        if (modalLabel) modalLabel.innerHTML = '<span class="text-emerald-600 font-semibold"><i class="fa-solid fa-circle-check"></i> Cloudflare KV 已连接</span>';
+      } else if (status === 'syncing') {
+        if (dot) dot.className = "inline-block w-2 h-2 rounded-full bg-amber-400 animate-ping";
+        if (label) label.innerText = text || "云端同步中...";
+        if (modalLabel) modalLabel.innerHTML = '<span class="text-amber-500 font-semibold"><i class="fa-solid fa-circle-notch fa-spin"></i> 同步中</span>';
+      } else {
+        if (dot) dot.className = "inline-block w-2 h-2 rounded-full bg-slate-400";
+        if (label) label.innerText = text || "本地离线模式";
+        if (modalLabel) modalLabel.innerHTML = '<span class="text-slate-400 font-semibold"><i class="fa-solid fa-cloud-slash"></i> 本地模式</span>';
+      }
+    }
+
+    // 从Cloudflare Pages KV 拉取全量家庭打卡数据 (零配置，同域毫秒级直连)
+    async function pullFromCloudflareKV() {
+      const channel = encodeURIComponent(appState.channelKey || 'fute_family');
+
+      try {
+        updateCloudStatus('syncing', '正在连接 Cloudflare 边缘节点...');
+        const res = await fetch(\`./api/sync?channel=\${channel}\`, {
+          method: 'GET'
+        });
+
+        if (!res.ok) {
+          throw new Error('HTTP ' + res.status);
+        }
+
+        const json = await res.json();
+        if (json && json.data && json.data.kids) {
+          // 云端有最新打卡数据，无感合并至本地
+          appState.kids = json.data.kids;
+          [1, 2].forEach(kId => {
+            if (!appState.kids[kId].history[todayStr]) {
+              appState.kids[kId].history[todayStr] = { stars: 0, doneTasks: [] };
+            }
+          });
+          localStorage.setItem('daka_family_state', JSON.stringify(appState));
+          renderTodayTasks();
+          if (appState.currentNav === 'calendar') renderCalendar();
+      recordAuditLog('cal_checkin', '家长特权', \`在日历\${isDone ? '补卡' : '取消'}【\${kid.name}】的【\${task.title}】\`, \`日期：\${dateStr}，调整后总星数：\${kid.stars}颗\`);
+          updateCloudStatus('online', '云端已同步');
+        } else {
+          // 云端尚无记录，初始化上传第一份
+          await pushToCloudflareKV();
+          updateCloudStatus('online', '云端已同步');
+        }
+      } catch (err) {
+        // 本地环境或离线时，优雅退回本地 LocalStorage，绝不影响使用
+        updateCloudStatus('offline', '本地模式 (待部署 Cloudflare)');
+      }
+    }
+
+    // 推送打卡与任务到Cloudflare Pages KV
+    async function pushToCloudflareKV() {
+      const channel = encodeURIComponent(appState.channelKey || 'fute_family');
+
+      try {
+        updateCloudStatus('syncing', '边缘同步中...');
+        const res = await fetch(\`./api/sync?channel=\${channel}\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel: appState.channelKey,
+            kids: appState.kids,
+            updatedAt: new Date().toISOString()
+          })
+        });
+
+        if (res.ok) {
+          updateCloudStatus('online', '云端已同步');
+        } else {
+          updateCloudStatus('offline', '本地暂存');
+        }
+      } catch (e) {
+        updateCloudStatus('offline', '本地暂存');
+      }
+    }
+
+    // 绑定家庭专属频道
+    async function saveSyncChannel() {
+      const val = document.getElementById('sync-channel-input').value.trim();
+      if (!val) {
+        showToast('请输入家庭频道码', '⚠️');
+        return;
+      }
+      appState.channelKey = val;
+      localStorage.setItem('daka_family_state', JSON.stringify(appState));
+      showToast('已绑定家庭频道，正在拉取...', '☁️');
+      await pullFromCloudflareKV();
+    }
+
+    // ================= 轻量无阻塞 Toast 提示 =================
+    let toastTimer = null;
+    function showToast(text, icon = '✨') {
+      const toast = document.getElementById('toast-tip');
+      if (!toast) return;
+      document.getElementById('toast-text').innerText = text;
+      document.getElementById('toast-icon').innerText = icon;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 1500);
+    }
+
+    // ================= 渲染今日任务卡片 (含确认打卡与锁定) =================
+    function renderTodayTasks() {
+      const kid = appState.kids[appState.currentKid];
+      const container = document.getElementById('task-list');
+      container.innerHTML = '';
+
+      // 筛选在今天有效生效的任务
+      const todayTasks = kid.tasks.filter(t => t.days.includes(currentDayIndex));
+
+      let doneCount = 0;
+      todayTasks.forEach(task => {
+        if (task.doneToday) doneCount++;
+
+        const card = document.createElement('div');
+        card.className = \`task-bounce bg-white rounded-2xl p-4 shadow-sm border transition flex items-center justify-between \${
+          task.doneToday ? 'border-emerald-200 bg-emerald-50/20 cursor-default' : 'border-slate-100 hover:border-indigo-200 cursor-pointer'
+        }\`;
+        
+        if (task.doneToday) {
+          // 已打卡状态：点击触发锁定提醒，孩子不能再取消
+          card.onclick = () => showToast('✅ 该任务已打卡锁定，不能再修改哦', '🔒');
+        } else {
+          // 未打卡状态：点击唤起二次确认弹窗
+          card.onclick = () => requestCheckin(task.id);
+        }
+
+        card.innerHTML = \`
+          <div class="flex items-center gap-3.5">
+            <div class="w-12 h-12 rounded-xl \${task.iconBg} text-white flex items-center justify-center text-lg shadow-sm">
+              <i class="fa-solid \${task.icon}"></i>
+            </div>
+            <div>
+              <div class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <span>\${task.title}</span>
+                \${task.doneToday ? \`<span class="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md font-medium"><i class="fa-solid fa-clock"></i> \${task.time}</span>\` : ''}
+              </div>
+              <p class="text-xs text-slate-400 mt-0.5">\${task.sub}</p>
+            </div>
+          </div>
+          <div>
+            \${task.doneToday ? \`
+              <div class="flex items-center gap-1.5 bg-emerald-100/70 text-emerald-800 text-xs font-bold px-2.5 py-1.5 rounded-xl border border-emerald-200">
+                <i class="fa-solid fa-check text-emerald-600"></i>
+                <span>已锁定</span>
+              </div>
+            \` : \`
+              <button onclick="event.stopPropagation(); requestCheckin(\${task.id})" class="flex items-center gap-1 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 px-3 py-1.5 rounded-xl shadow-sm transition active:scale-95">
+                <i class="fa-solid fa-check"></i>
+                <span>打卡</span>
+              </button>
+            \`}
+          </div>
+        \`;
+        container.appendChild(card);
+      });
+
+      document.getElementById('daily-completion-text').innerText = \`已完成 \${doneCount} / \${todayTasks.length} 项\`;
+      document.getElementById('daily-star-reward').innerHTML = \`
+        <span class="text-[11px] text-slate-400 block font-medium">今日已赚</span>
+        <span class="text-sm font-extrabold text-amber-600 flex items-center justify-end gap-1">
+          <span>+\${doneCount}</span> <i class="fa-solid fa-star text-xs"></i>
+        </span>
+      \`;
+
+      renderStarProgress();
+      renderGiftShowcase();
+    }
+
+    // ================= 渲染心愿充能发光进度条 =================
+    function renderStarProgress() {
+      const kid = appState.kids[appState.currentKid];
+      document.getElementById('wish-title').innerHTML = \`<span>\${kid.wish}</span> 🎁\`;
+      document.getElementById('current-stars-display').innerText = kid.stars;
+      document.getElementById('target-stars-display').innerText = kid.targetStars;
+      
+      const percent = Math.min(100, Math.round((kid.stars / kid.targetStars) * 100));
+      document.getElementById('star-percentage').innerText = \`\${percent}%\`;
+      
+      const bar = document.getElementById('star-progress-bar');
+      const wishContainer = document.getElementById('wish-card-container');
+      const giftUnlockArea = document.getElementById('gift-unlock-area');
+      const hintText = document.getElementById('star-hint-text');
+
+      bar.style.width = \`\${percent}%\`;
+
+      // 满星充能发光判定
+      if (kid.stars >= kid.targetStars) {
+        bar.className = 'h-3 rounded-full transition-all duration-700 energy-charged-bar';
+        wishContainer.className = 'bg-gradient-to-br from-amber-100 via-orange-100 to-yellow-100 border-2 border-amber-400 rounded-3xl p-4 shadow-xl relative overflow-hidden transition-all duration-500 ring-4 ring-amber-300/50';
+        giftUnlockArea.classList.remove('hidden');
+        hintText.innerText = '⚡ 能量100%充能完毕！请点击下方礼物盒兑换奖励！';
+        hintText.className = 'text-amber-900 font-extrabold';
+      } else {
+        bar.className = 'h-3 rounded-full transition-all duration-700 bg-gradient-to-r from-amber-400 to-orange-500';
+        wishContainer.className = 'bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100/50 border border-amber-200/90 rounded-3xl p-4 shadow-sm relative overflow-hidden transition-all duration-500';
+        giftUnlockArea.classList.add('hidden');
+        const remain = Math.max(0, kid.targetStars - kid.stars);
+        hintText.innerText = \`🌟 还差 \${remain} 颗星即可攒满充能召唤礼物盒！\`;
+        hintText.className = 'text-amber-800';
+      }
+
+      // 顶部统计更新
+      document.getElementById('star-count-1').innerText = \`⭐ \${appState.kids[1].stars}\`;
+      document.getElementById('star-count-2').innerText = \`⭐ \${appState.kids[2].stars}\`;
+    }
+
+    // ================= 渲染荣誉成就宝箱橱窗 =================
+    function renderGiftShowcase() {
+      const kid = appState.kids[appState.currentKid];
+      const container = document.getElementById('gift-showcase');
+      const badgeCount = document.getElementById('gift-badge-count');
+      container.innerHTML = '';
+      badgeCount.innerText = \`已集齐 \${kid.gifts.length} 个\`;
+
+      if (kid.gifts.length === 0) {
+        container.innerHTML = \`<p class="col-span-4 text-xs text-slate-400 py-2 text-center">暂未兑换礼物，加把劲攒满星星吧！</p>\`;
+        return;
+      }
+
+      kid.gifts.forEach(gift => {
+        const item = document.createElement('div');
+        item.className = "bg-amber-50/60 border border-amber-200/60 rounded-xl p-2 flex flex-col items-center text-center shadow-2xs hover:bg-amber-100/60 transition";
+        item.innerHTML = \`
+          <div class="text-2xl mb-1">🎁</div>
+          <div class="text-[11px] font-bold text-slate-800 truncate w-full" title="\${gift.name}">\${gift.name}</div>
+          <div class="text-[9px] text-amber-700/80 font-medium">\${gift.date.slice(5)} 兑换</div>
+        \`;
+        container.appendChild(item);
+      });
+    }
+
+    // ================= 点击兑换心愿礼物 =================
+    function claimReward() {
+      const kid = appState.kids[appState.currentKid];
+
+      if (typeof confetti === 'function') {
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.6 }
+        });
+      }
+
+      const giftName = kid.wish;
+      kid.gifts.unshift({
+        id: Date.now(),
+        name: giftName,
+        date: todayStr
+      });
+
+      // 重置为0星从头开始攒，下方多一个礼物盒
+      kid.stars = 0;
+
+      saveAppState();
+      showToast(\`🎉 成功兑换【\${giftName}】！宝箱勋章+1\`, '🎁');
+      renderTodayTasks();
+    }
+
+    // ================= 孩子打卡二次确认与永久锁定逻辑 =================
+    appState.pendingCheckinId = null;
+
+    function requestCheckin(id) {
+      const kid = appState.kids[appState.currentKid];
+      const task = kid.tasks.find(t => t.id === id);
+      if (!task || task.doneToday) return;
+
+      appState.pendingCheckinId = id;
+      document.getElementById('confirm-task-name').innerText = \`【\${task.title}】\`;
+      document.getElementById('checkin-confirm-modal').classList.remove('hidden');
+    }
+
+    function closeCheckinConfirm() {
+      appState.pendingCheckinId = null;
+      document.getElementById('checkin-confirm-modal').classList.add('hidden');
+    }
+
+    // 孩子点击确认打卡：提交并永久锁定，不能再修改！
+    function executeConfirmCheckin() {
+      const id = appState.pendingCheckinId;
+      if (!id) return;
+
+      const kid = appState.kids[appState.currentKid];
+      const task = kid.tasks.find(t => t.id === id);
+      if (task && !task.doneToday) {
+        task.doneToday = true;
+        const cur = new Date();
+        task.time = \`\${String(cur.getHours()).padStart(2, '0')}:\${String(cur.getMinutes()).padStart(2, '0')}\`;
+        kid.stars += 1;
+
+        if (kid.stars >= kid.targetStars && typeof confetti === 'function') {
+          confetti({ particleCount: 70, spread: 70, origin: { y: 0.5 } });
+        }
+
+        kid.history[todayStr].stars = kid.tasks.filter(t => t.doneToday).length;
+
+        recordAuditLog('checkin', \`\${kid.name} (孩子端)\`, \`打卡完成【\${task.title}】\`, \`今日打卡已锁定，星星 +1，当前累计 \${kid.stars} 颗\`);
+        closeCheckinConfirm();
+        saveAppState();
+        renderTodayTasks();
+        if (appState.currentNav === 'calendar') {
+          renderCalendar();
+        }
+
+        showToast(\`🎉【\${task.title}】打卡成功并已锁定！获得 1 颗星\`, '⭐');
+      }
+    }
+
+    // 家长特权修正今天打卡
+    function toggleTask(id) {
+      const kid = appState.kids[appState.currentKid];
+      const task = kid.tasks.find(t => t.id === id);
+      if (task) {
+        task.doneToday = !task.doneToday;
+        if (task.doneToday) {
+          const cur = new Date();
+          task.time = \`\${String(cur.getHours()).padStart(2, '0')}:\${String(cur.getMinutes()).padStart(2, '0')}\`;
+          kid.stars += 1;
+        } else {
+          task.time = null;
+          kid.stars = Math.max(0, kid.stars - 1);
+        }
+        kid.history[todayStr].stars = kid.tasks.filter(t => t.doneToday).length;
+        saveAppState();
+        renderTodayTasks();
+        if (appState.currentNav === 'calendar') {
+          renderCalendar();
+        }
+      }
+    }
+
+    // 孩子切换
+    function switchKid(kidId) {
+      appState.currentKid = kidId;
+      const btn1 = document.getElementById('kid-btn-1');
+      const btn2 = document.getElementById('kid-btn-2');
+
+      if (kidId === 1) {
+        btn1.className = "flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all bg-white text-indigo-700 shadow-sm";
+        btn2.className = "flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all text-white/80 hover:text-white";
+      } else {
+        btn2.className = "flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all bg-white text-indigo-700 shadow-sm";
+        btn1.className = "flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all text-white/80 hover:text-white";
+      }
+      renderTodayTasks();
+      if (appState.currentNav === 'calendar') {
+        renderCalendar();
+      }
+    }
+
+    // 底部导航切换
+    function switchNav(nav) {
+      appState.currentNav = nav;
+      const viewToday = document.getElementById('view-today');
+      const viewCal = document.getElementById('view-calendar');
+      const navToday = document.getElementById('nav-today');
+      const navCal = document.getElementById('nav-calendar');
+
+      if (nav === 'today') {
+        viewToday.classList.remove('hidden');
+        viewCal.classList.add('hidden');
+        navToday.className = "flex flex-col items-center gap-1 text-indigo-600 font-medium";
+        navCal.className = "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-medium";
+      } else {
+        viewToday.classList.add('hidden');
+        viewCal.classList.remove('hidden');
+        navCal.className = "flex flex-col items-center gap-1 text-indigo-600 font-medium";
+        navToday.className = "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-medium";
+        renderCalendar();
+      }
+    }
+
+    // ================= 渲染打卡日历 (动态计算真实月份天数) =================
+    function renderCalendar() {
+      const grid = document.getElementById('calendar-grid');
+      grid.innerHTML = '';
+      const kid = appState.kids[appState.currentKid];
+      const year = appState.currentYear;
+      const month = appState.currentMonth;
+      
+      const totalDays = new Date(year, month + 1, 0).getDate();
+      const firstDayWeek = new Date(year, month, 1).getDay();
+
+      // 首行空位占位
+      for (let i = 0; i < firstDayWeek; i++) {
+        const emptyCell = document.createElement('div');
+        emptyCell.className = "h-12";
+        grid.appendChild(emptyCell);
+      }
+
+      const isCurrentMonthNow = (year === currentYearVal && month === currentMonthVal);
+
+      for (let day = 1; day <= totalDays; day++) {
+        const dateStr = \`\${year}-\${String(month + 1).padStart(2, '0')}-\${String(day).padStart(2, '0')}\`;
+        const item = document.createElement('div');
+        
+        let bgStyle = 'bg-slate-50 text-slate-600';
+        let starBadge = '';
+
+        const rec = kid.history[dateStr];
+
+        if (!isCurrentMonthNow || day <= currentDayVal) {
+          const starCount = rec ? rec.stars : 0;
+          if (starCount > 0) {
+            if (starCount >= 3) {
+              bgStyle = 'bg-emerald-50 text-emerald-800 border border-emerald-200';
+              starBadge = \`<span class="text-[9px] text-amber-500 font-bold flex items-center justify-center">⭐ \${starCount}</span>\`;
+            } else {
+              bgStyle = 'bg-amber-50 text-amber-800 border border-amber-200';
+              starBadge = \`<span class="text-[9px] text-amber-500 font-bold flex items-center justify-center">⭐ \${starCount}</span>\`;
+            }
+          } else {
+            bgStyle = 'bg-slate-100 text-slate-400';
+            starBadge = \`<span class="text-[9px] text-slate-300">-</span>\`;
+          }
+        } else {
+          bgStyle = 'text-slate-300';
+        }
+
+        if (day === appState.selectedCalDay) {
+          bgStyle += ' ring-2 ring-indigo-500 font-black';
+        }
+
+        item.className = \`h-12 rounded-xl flex flex-col items-center justify-center cursor-pointer transition \${bgStyle}\`;
+        item.innerHTML = \`<span class="text-xs font-semibold leading-tight">\${day}</span>\${starBadge}\`;
+        item.onclick = () => selectCalDate(day);
+        grid.appendChild(item);
+      }
+
+      selectCalDate(appState.selectedCalDay || (isCurrentMonthNow ? currentDayVal : 1));
+    }
+
+    // 选中某个历史日期
+    function selectCalDate(day) {
+      appState.selectedCalDay = day;
+      const year = appState.currentYear;
+      const month = appState.currentMonth;
+      const dateStr = \`\${year}-\${String(month + 1).padStart(2, '0')}-\${String(day).padStart(2, '0')}\`;
+      const kid = appState.kids[appState.currentKid];
+      const detailTitle = document.getElementById('selected-date-detail');
+      const starsLabel = document.getElementById('selected-date-stars');
+      const container = document.getElementById('detail-list');
+
+      detailTitle.innerText = \`\${month + 1}月\${day}日 明细\`;
+
+      const isCurrentMonthNow = (year === currentYearVal && month === currentMonthVal);
+      if (isCurrentMonthNow && day > currentDayVal) {
+        starsLabel.innerText = '暂无打卡数据';
+        container.innerHTML = \`<p class="text-xs text-slate-400 py-4 text-center">未来的日期暂无记录</p>\`;
+        return;
+      }
+
+      if (!kid.history[dateStr]) {
+        kid.history[dateStr] = { stars: 0, doneTasks: [] };
+      }
+      const rec = kid.history[dateStr];
+      starsLabel.innerText = \`⭐ 当天斩获 \${rec.stars} 颗星\`;
+      container.innerHTML = '';
+
+      const isUnlocked = appState.isParentMode;
+      const modeTag = document.getElementById('history-mode-tag');
+      if (modeTag) {
+        if (isUnlocked) {
+          modeTag.className = "text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-bold flex items-center gap-1";
+          modeTag.innerHTML = \`<i class="fa-solid fa-lock-open text-xs"></i> 补卡已激活 (可点击补勾)\`;
+        } else {
+          modeTag.className = "text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full font-medium flex items-center gap-1";
+          modeTag.innerHTML = \`<i class="fa-solid fa-lock text-xs"></i> 历史只读 (家长模式可修改)\`;
+        }
+      }
+
+      const isTodayItem = (isCurrentMonthNow && day === currentDayVal);
+
+      kid.tasks.forEach(t => {
+        const isDone = isTodayItem ? t.doneToday : rec.doneTasks.includes(t.title);
+        const card = document.createElement('div');
+        
+        const canClick = isUnlocked;
+        card.className = \`p-2.5 rounded-xl border flex items-center justify-between transition \${
+          canClick ? 'cursor-pointer hover:shadow-xs' : 'cursor-default opacity-90'
+        } \${
+          isDone ? 'bg-emerald-50/40 border-emerald-200' : 'bg-slate-50 border-slate-200/70'
+        }\`;
+        
+        if (canClick) {
+          card.onclick = () => toggleHistoryCheckin(day, t.title);
+        } else {
+          // 未进入家长模式：直接弹出密码框解锁，不弹警告
+          card.onclick = () => openPinModal();
+        }
+
+        let statusText = '';
+        if (isUnlocked) {
+          statusText = isDone ? '已打卡 (点击取消)' : '未完成 (点击补卡)';
+        } else {
+          statusText = isDone ? '已完成' : '未完成';
+        }
+
+        card.innerHTML = \`
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg \${t.iconBg} text-white flex items-center justify-center text-xs">
+              <i class="fa-solid \${t.icon}"></i>
+            </div>
+            <div>
+              <span class="font-bold text-slate-800 text-xs">\${t.title}</span>
+              <p class="text-[10px] text-slate-400">\${t.sub}</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-semibold \${isDone ? 'text-emerald-600' : 'text-slate-400'}">
+              \${statusText}
+            </span>
+            <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs transition \${
+              isDone ? 'bg-emerald-500 text-white shadow-xs' : 'border-2 border-slate-300 text-transparent'
+            }">
+              <i class="fa-solid fa-check"></i>
+            </div>
+          </div>
+        \`;
+        container.appendChild(card);
+      });
+    }
+
+    // 日历中点击某任务：执行家长专属补卡
+    function toggleHistoryCheckin(day, taskTitle) {
+      if (!appState.isParentMode) {
+        openPinModal();
+        return;
+      }
+
+      const kid = appState.kids[appState.currentKid];
+      const year = appState.currentYear;
+      const month = appState.currentMonth;
+      const isCurrentMonthNow = (year === currentYearVal && month === currentMonthVal);
+
+      if (isCurrentMonthNow && day === currentDayVal) {
+        const t = kid.tasks.find(x => x.title === taskTitle);
+        if (t) {
+          toggleTask(t.id);
+        }
+        return;
+      }
+
+      const dateStr = \`\${year}-\${String(month + 1).padStart(2, '0')}-\${String(day).padStart(2, '0')}\`;
+      const rec = kid.history[dateStr];
+
+      // 历史日期的补卡
+      const idx = rec.doneTasks.indexOf(taskTitle);
+      if (idx > -1) {
+        rec.doneTasks.splice(idx, 1);
+        rec.stars = Math.max(0, rec.stars - 1);
+        kid.stars = Math.max(0, kid.stars - 1);
+      } else {
+        rec.doneTasks.push(taskTitle);
+        rec.stars += 1;
+        kid.stars += 1;
+      }
+
+      saveAppState();
+      renderCalendar();
+      renderTodayTasks();
+    }
+
+    // ================= 家长密码验证与模式切换 =================
+    function openPinModal() {
+      document.getElementById('pin-modal').classList.remove('hidden');
+      const errTip = document.getElementById('pin-error-tip');
+      if (errTip) errTip.classList.add('hidden');
+      const input = document.getElementById('pin-input');
+      input.value = '';
+      input.classList.remove('border-rose-500');
+      setTimeout(() => input.focus(), 100);
+    }
+
+    function closePinModal() {
+      document.getElementById('pin-modal').classList.add('hidden');
+    }
+
+    function verifyPin() {
+      const pin = document.getElementById('pin-input').value.trim();
+      const input = document.getElementById('pin-input');
+      const errTip = document.getElementById('pin-error-tip');
+
+      // 生产环境安全密码：1234
+      if (pin === '1234') {
+        appState.isParentMode = true;
+        closePinModal();
+        updateParentUi();
+        renderCalendar();
+        showToast('家长模式已解锁 (可补卡)', '🔓');
+        recordAuditLog('auth', '家长端', '解锁家长特权模式', '输入 4 位 PIN 码验证通过，进入管理面板');
+      } else {
+        input.classList.add('border-rose-500');
+        if (errTip) errTip.classList.remove('hidden');
+        input.value = '';
+        input.focus();
+      }
+    }
+
+    function exitParentMode() {
+      appState.isParentMode = false;
+      updateParentUi();
+      renderCalendar();
+      showToast('已退出家长模式 (日历已锁)', '🔒');
+    }
+
+    function updateParentUi() {
+      const group = document.getElementById('parent-btn-group');
+      const giftQuickBtn = document.getElementById('gift-manage-quick-btn');
+      if (appState.isParentMode) {
+        if (giftQuickBtn) giftQuickBtn.classList.remove('hidden');
+        group.innerHTML = \`
+          <button onclick="openParentModal()" class="flex items-center gap-1 text-xs bg-white/20 hover:bg-white/30 px-2.5 py-1.5 rounded-full transition font-semibold">
+            <i class="fa-solid fa-sliders"></i>
+            <span>项目设置</span>
+          </button>
+          <button onclick="exitParentMode()" class="flex items-center gap-1 text-xs bg-amber-400 text-amber-950 px-2.5 py-1.5 rounded-full transition font-bold shadow-xs">
+            <i class="fa-solid fa-lock-open"></i>
+            <span>退出特权</span>
+          </button>
+        \`;
+      } else {
+        if (giftQuickBtn) giftQuickBtn.classList.add('hidden');
+        group.innerHTML = \`
+          <button onclick="openPinModal()" class="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 backdrop-blur-md px-3 py-1.5 rounded-full transition font-medium">
+            <i class="fa-solid fa-lock"></i>
+            <span>家长模式</span>
+          </button>
+        \`;
+      }
+    }
+
+    // ================= 家长管理面板逻辑 (支持编辑/修改/新增/删除) =================
+    function openParentModal() {
+      const kid = appState.kids[appState.currentKid];
+      const kidText = document.getElementById('parent-current-kid-text');
+      if (kidText) kidText.innerText = \`管理【\${kid.name}】的任务、心愿与成就宝箱\`;
+      const wishName = document.getElementById('input-wish-name');
+      if (wishName) wishName.value = kid.wish;
+      const wishTarget = document.getElementById('input-wish-target');
+      if (wishTarget) wishTarget.value = kid.targetStars;
+      if (typeof checkDbStatus === 'function') checkDbStatus();
+      hideTaskForm();
+      hideGiftForm();
+      renderParentTaskList();
+      renderParentGiftList();
+      updateAuditBadge();
+      document.getElementById('parent-modal').classList.remove('hidden');
+    }
+
+    function openAuditLogModal() {
+      renderAuditLogs();
+      updateAuditBadge();
+      document.getElementById('audit-log-modal').classList.remove('hidden');
+    }
+
+    function closeAuditLogModal() {
+      document.getElementById('audit-log-modal').classList.add('hidden');
+    }
+
+    function closeParentModal() {
+      const kid = appState.kids[appState.currentKid];
+      const oldWish = kid.wish;
+      const oldTarget = kid.targetStars;
+      const newWish = document.getElementById('input-wish-name').value.trim() || '心愿奖励';
+      const newTarget = parseInt(document.getElementById('input-wish-target').value) || 30;
+      if (oldWish !== newWish || oldTarget !== newTarget) {
+        recordAuditLog('wish_edit', '家长特权', \`修改【\${kid.name}】的心愿与目标\`, \`心愿由【\${oldWish}】变更为【\${newWish}】，目标星数由【\${oldTarget}星】变为【\${newTarget}星】\`);
+      }
+      kid.wish = newWish;
+      kid.targetStars = newTarget;
+      kid.targetStars = parseInt(document.getElementById('input-wish-target').value) || 30;
+      saveAppState();
+      renderStarProgress();
+      document.getElementById('parent-modal').classList.add('hidden');
+    }
+
+    
+    // ================= 家长操作与安全审计日志系统 =================
+    let currentLogFilter = 'all';
+
+    function formatLogTime() {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return \`\${d.getFullYear()}-\${pad(d.getMonth() + 1)}-\${pad(d.getDate())} \${pad(d.getHours())}:\${pad(d.getMinutes())}:\${pad(d.getSeconds())}\`;
+    }
+
+    function recordAuditLog(type, operator, title, detail) {
+      if (!appState.auditLogs) appState.auditLogs = [];
+      const logItem = {
+        id: 'log_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+        time: formatLogTime(),
+        type: type, // 'checkin', 'cal_checkin', 'task_add', 'task_edit', 'task_delete', 'gift_add', 'gift_edit', 'gift_delete', 'wish_edit', 'auth'
+        operator: operator,
+        title: title,
+        detail: detail
+      };
+      appState.auditLogs.unshift(logItem);
+      if (appState.auditLogs.length > 200) {
+        appState.auditLogs = appState.auditLogs.slice(0, 200);
+      }
+      updateAuditBadge();
+      if (typeof saveAppState === 'function') saveAppState();
+      if (typeof savePrototypeState === 'function') savePrototypeState();
+    }
+
+    function updateAuditBadge() {
+      const count = (appState.auditLogs || []).length;
+      const countStr = count > 99 ? '99+' : count;
+      ['audit-log-count-badge-today', 'audit-log-count-badge-cal', 'audit-log-count-badge-modal', 'audit-log-badge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = id.includes('today') || id.includes('cal') ? countStr + ' 条' : countStr;
+      });
+    }
+
+    function switchParentTab(tabName) {
+      const settingsPanel = document.getElementById('panel-parent-settings');
+      const logsPanel = document.getElementById('panel-parent-logs');
+      const btnSettings = document.getElementById('tab-btn-settings');
+      const btnLogs = document.getElementById('tab-btn-logs');
+
+      if (tabName === 'logs') {
+        settingsPanel.classList.add('hidden');
+        logsPanel.classList.remove('hidden');
+        btnLogs.className = "pb-2 text-xs font-bold border-b-2 border-indigo-600 text-indigo-600 transition flex items-center gap-1.5";
+        btnSettings.className = "pb-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition flex items-center gap-1.5";
+        renderAuditLogs();
+      } else {
+        logsPanel.classList.add('hidden');
+        settingsPanel.classList.remove('hidden');
+        btnSettings.className = "pb-2 text-xs font-bold border-b-2 border-indigo-600 text-indigo-600 transition flex items-center gap-1.5";
+        btnLogs.className = "pb-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition flex items-center gap-1.5";
+      }
+    }
+
+    function filterAuditLogs(category) {
+      currentLogFilter = category;
+      document.querySelectorAll('.log-filter-btn').forEach(btn => {
+        btn.className = "log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100";
+      });
+      const activeBtn = document.getElementById('log-filter-' + category);
+      if (activeBtn) activeBtn.className = "log-filter-btn px-2.5 py-1 rounded-lg font-bold bg-indigo-50 text-indigo-600";
+      renderAuditLogs();
+    }
+
+    function clearAuditLogs() {
+      if (confirm('确定要清空所有的操作审计历史日志吗？清空后不可恢复。')) {
+        appState.auditLogs = [];
+        updateAuditBadge();
+        renderAuditLogs();
+        if (typeof saveAppState === 'function') saveAppState();
+        if (typeof savePrototypeState === 'function') savePrototypeState();
+        showToast('审计日志已清空', '🗑️');
+      }
+    }
+
+    function renderAuditLogs() {
+      const container = document.getElementById('audit-log-list');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const logs = appState.auditLogs || [];
+      const filtered = logs.filter(log => {
+        if (currentLogFilter === 'all') return true;
+        if (currentLogFilter === 'checkin') return log.type === 'checkin' || log.type === 'cal_checkin';
+        if (currentLogFilter === 'task') return log.type.startsWith('task_');
+        if (currentLogFilter === 'gift') return log.type.startsWith('gift_') || log.type === 'wish_edit';
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = \`<div class="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-slate-100">
+          <i class="fa-solid fa-clipboard-check text-2xl text-slate-300 block mb-2"></i>
+          暂无相关审计日志记录
+        </div>\`;
+        return;
+      }
+
+      filtered.forEach(log => {
+        let badgeColor = "bg-slate-100 text-slate-700";
+        let badgeText = "系统";
+        let icon = "fa-circle-info";
+
+        if (log.type === 'checkin') {
+          badgeColor = "bg-emerald-100 text-emerald-800";
+          badgeText = "打卡锁定";
+          icon = "fa-check";
+        } else if (log.type === 'cal_checkin') {
+          badgeColor = "bg-teal-100 text-teal-800";
+          badgeText = "日历补卡";
+          icon = "fa-calendar-check";
+        } else if (log.type === 'task_add') {
+          badgeColor = "bg-blue-100 text-blue-800";
+          badgeText = "新建任务";
+          icon = "fa-plus";
+        } else if (log.type === 'task_edit') {
+          badgeColor = "bg-indigo-100 text-indigo-800";
+          badgeText = "修改任务";
+          icon = "fa-pen-to-square";
+        } else if (log.type === 'task_delete') {
+          badgeColor = "bg-rose-100 text-rose-800";
+          badgeText = "删除任务";
+          icon = "fa-trash";
+        } else if (log.type === 'gift_add') {
+          badgeColor = "bg-amber-100 text-amber-800";
+          badgeText = "补录勋章";
+          icon = "fa-trophy";
+        } else if (log.type === 'gift_edit') {
+          badgeColor = "bg-amber-100 text-amber-800";
+          badgeText = "修改勋章";
+          icon = "fa-medal";
+        } else if (log.type === 'gift_delete') {
+          badgeColor = "bg-rose-100 text-rose-800";
+          badgeText = "删除勋章";
+          icon = "fa-trash-can";
+        } else if (log.type === 'wish_edit') {
+          badgeColor = "bg-purple-100 text-purple-800";
+          badgeText = "调整心愿";
+          icon = "fa-gift";
+        } else if (log.type === 'auth') {
+          badgeColor = "bg-slate-200 text-slate-700";
+          badgeText = "特权解锁";
+          icon = "fa-shield-halved";
+        }
+
+        const div = document.createElement('div');
+        div.className = "p-3 bg-white border border-slate-200/80 rounded-2xl space-y-1.5 shadow-2xs text-xs";
+        div.innerHTML = \`
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 \${badgeColor}">
+                <i class="fa-solid \${icon}"></i> \${badgeText}
+              </span>
+              <span class="font-bold text-slate-800">\${log.title}</span>
+            </div>
+            <span class="text-[10px] text-slate-400 font-mono">\${log.time.slice(5)}</span>
+          </div>
+          <p class="text-[11px] text-slate-500 pl-1 leading-snug">\${log.detail}</p>
+          <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
+            <span>操作主体：<b class="text-slate-700 font-medium">\${log.operator}</b></span>
+            <span class="font-mono text-[9px] text-slate-300">#\${log.id.slice(-6)}</span>
+          </div>
+        \`;
+        container.appendChild(div);
+      });
+    }
+  
+    function renderParentTaskList() {
+      const kid = appState.kids[appState.currentKid];
+      const listContainer = document.getElementById('parent-task-list');
+      listContainer.innerHTML = '';
+
+      kid.tasks.forEach(task => {
+        const div = document.createElement('div');
+        div.className = "p-3 bg-slate-50 border border-slate-200/80 rounded-xl flex items-center justify-between text-xs";
+        
+        const daysDesc = task.days.length === 7 ? '每天' : task.days.map(d => weekNames[d]).join('、');
+
+        div.innerHTML = \`
+          <div class="flex-1 mr-2">
+            <div class="font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+              <span>\${task.title}</span>
+              <span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.2 rounded font-medium">\${daysDesc}</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-0.5">\${task.sub}</p>
+          </div>
+          <div class="flex items-center gap-1">
+            <button onclick="editTask(\${task.id})" class="text-indigo-600 hover:text-indigo-800 p-1.5 rounded-lg hover:bg-indigo-50" title="编辑修改">
+              <i class="fa-solid fa-pen"></i>
+            </button>
+            <button onclick="deleteTask(\${task.id})" class="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50" title="删除">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        \`;
+        listContainer.appendChild(div);
+      });
+    }
+
+    function showTaskForm() {
+      document.getElementById('task-edit-form').classList.remove('hidden');
+      document.getElementById('form-action-title').innerText = '✨ 新增打卡项目';
+      document.getElementById('editing-task-id').value = '';
+      document.getElementById('task-input-name').value = '';
+      document.getElementById('task-input-desc').value = '';
+      const dayBtns = document.querySelectorAll('#weekdays-selector .day-opt');
+      dayBtns.forEach(btn => {
+        btn.className = "day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white";
+      });
+    }
+
+    function editTask(id) {
+      const kid = appState.kids[appState.currentKid];
+      const task = kid.tasks.find(t => t.id === id);
+      if (!task) return;
+
+      document.getElementById('task-edit-form').classList.remove('hidden');
+      document.getElementById('form-action-title').innerText = \`✏️ 编辑任务：\${task.title}\`;
+      document.getElementById('editing-task-id').value = task.id;
+      document.getElementById('task-input-name').value = task.title;
+      document.getElementById('task-input-desc').value = task.sub;
+
+      const dayBtns = document.querySelectorAll('#weekdays-selector .day-opt');
+      dayBtns.forEach(btn => {
+        const dayVal = parseInt(btn.getAttribute('data-day'));
+        if (task.days.includes(dayVal)) {
+          btn.className = "day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white";
+        } else {
+          btn.className = "day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-slate-200 text-slate-600";
+        }
+      });
+    }
+
+    function hideTaskForm() {
+      document.getElementById('task-edit-form').classList.add('hidden');
+    }
+
+    function toggleWeekDay(btn) {
+      if (btn.classList.contains('bg-indigo-600')) {
+        btn.className = "day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-slate-200 text-slate-600";
+      } else {
+        btn.className = "day-opt py-1 text-center text-[10px] font-bold rounded-lg bg-indigo-600 text-white";
+      }
+    }
+
+    function saveTaskForm() {
+      const title = document.getElementById('task-input-name').value.trim();
+      const desc = document.getElementById('task-input-desc').value.trim();
+      const editingId = document.getElementById('editing-task-id').value;
+
+      if (!title) {
+        showToast('请输入任务名称', '⚠️');
+        return;
+      }
+
+      const dayBtns = document.querySelectorAll('#weekdays-selector .day-opt');
+      const selectedDays = [];
+      dayBtns.forEach(btn => {
+        if (btn.classList.contains('bg-indigo-600')) {
+          selectedDays.push(parseInt(btn.getAttribute('data-day')));
+        }
+      });
+
+      if (selectedDays.length === 0) {
+        showToast('请至少勾选一天生效日', '⚠️');
+        return;
+      }
+
+      const kid = appState.kids[appState.currentKid];
+
+      if (editingId) {
+        const task = kid.tasks.find(t => t.id === parseInt(editingId));
+        if (task) {
+          task.title = title;
+          task.sub = desc || '日常坚持打卡';
+          task.days = selectedDays;
+        }
+      } else {
+        kid.tasks.push({
+          id: Date.now(),
+          title: title,
+          sub: desc || '日常坚持打卡',
+          days: selectedDays,
+          icon: 'fa-star',
+          iconBg: 'bg-indigo-500',
+          doneToday: false,
+          time: null
+        });
+      }
+
+      recordAuditLog(editingId ? 'task_edit' : 'task_add', '家长特权', \`\${editingId ? '修改' : '新建'}【\${kid.name}】的任务【\${title}】\`, \`生效周期：\${selectedDays.map(d => weekNames[d]).join('、')}，描述：\${desc || '日常坚持打卡'}\`);
+      hideTaskForm();
+      saveAppState();
+      renderParentTaskList();
+      renderTodayTasks();
+    }
+
+    
+    // ================= 荣誉成就宝箱管理 (增删改) =================
+    function renderParentGiftList() {
+      const kid = appState.kids[appState.currentKid];
+      const container = document.getElementById('parent-gift-list');
+      if (!container) return;
+      container.innerHTML = '';
+
+      if (!kid.gifts || kid.gifts.length === 0) {
+        container.innerHTML = '<p class="text-xs text-slate-400 py-3 text-center bg-slate-50 rounded-xl">暂无成就礼物，点击上方可补录！</p>';
+        return;
+      }
+
+      kid.gifts.forEach(gift => {
+        const div = document.createElement('div');
+        div.className = "p-2.5 bg-amber-50/50 border border-amber-200/80 rounded-xl flex items-center justify-between text-xs";
+        div.innerHTML = \`
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🎁</span>
+            <div>
+              <div class="font-bold text-slate-800">\${gift.name}</div>
+              <div class="text-[10px] text-amber-700 font-medium">\${gift.date} 兑换</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1">
+            <button onclick="editGift(\${gift.id})" class="text-indigo-600 hover:text-indigo-800 p-1.5 rounded-lg hover:bg-white transition" title="编辑修改">
+              <i class="fa-solid fa-pen"></i>
+            </button>
+            <button onclick="deleteGift(\${gift.id})" class="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-white transition" title="删除">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        \`;
+        container.appendChild(div);
+      });
+    }
+
+    function showGiftForm() {
+      document.getElementById('gift-edit-form').classList.remove('hidden');
+      document.getElementById('gift-form-action-title').innerText = '🎁 补录心愿礼物';
+      document.getElementById('editing-gift-id').value = '';
+      document.getElementById('gift-input-name').value = '';
+      const todayIso = new Date().toISOString().slice(0, 10);
+      document.getElementById('gift-input-date').value = todayIso;
+    }
+
+    function hideGiftForm() {
+      const f = document.getElementById('gift-edit-form');
+      if (f) f.classList.add('hidden');
+    }
+
+    function editGift(id) {
+      const kid = appState.kids[appState.currentKid];
+      const gift = kid.gifts.find(g => g.id === id);
+      if (!gift) return;
+
+      document.getElementById('gift-edit-form').classList.remove('hidden');
+      document.getElementById('gift-form-action-title').innerText = \`✏️ 编辑心愿礼物：\${gift.name}\`;
+      document.getElementById('editing-gift-id').value = gift.id;
+      document.getElementById('gift-input-name').value = gift.name;
+      document.getElementById('gift-input-date').value = gift.date;
+    }
+
+    function deleteGift(id) {
+      if (confirm('确定要从宝箱中删除这个礼物勋章吗？')) {
+        const kid = appState.kids[appState.currentKid];
+        const delGift = kid.gifts.find(g => g.id === id);
+        recordAuditLog('gift_delete', '家长特权', \`删除【\${kid.name}】的宝箱勋章【\${delGift ? delGift.name : id}】\`, '勋章已从荣誉成就宝箱中移出');
+        kid.gifts = kid.gifts.filter(g => g.id !== id);
+        saveAppState();
+        renderParentGiftList();
+        renderGiftShowcase();
+        showToast('已从宝箱删除礼物', '🗑️');
+      }
+    }
+
+    function saveGiftForm() {
+      const name = document.getElementById('gift-input-name').value.trim();
+      const date = document.getElementById('gift-input-date').value.trim();
+      const editId = document.getElementById('editing-gift-id').value;
+
+      if (!name) {
+        showToast('请输入礼物名称', '⚠️');
+        return;
+      }
+      if (!date) {
+        showToast('请选择兑换日期', '⚠️');
+        return;
+      }
+
+      const kid = appState.kids[appState.currentKid];
+      if (!kid.gifts) kid.gifts = [];
+
+      if (editId) {
+        const gift = kid.gifts.find(g => g.id === parseInt(editId));
+        if (gift) {
+          gift.name = name;
+          gift.date = date;
+          showToast('已更新心愿礼物！', '✅');
+        }
+      } else {
+        kid.gifts.unshift({
+          id: Date.now(),
+          name: name,
+          date: date
+        });
+        showToast('已成功补录心愿礼物！', '🎉');
+      }
+
+      recordAuditLog(editId ? 'gift_edit' : 'gift_add', '家长特权', \`\${editId ? '修改' : '补录'}【\${kid.name}】的心愿勋章【\${name}】\`, \`兑换日期：\${date}，勋章已存入宝箱\`);
+      hideGiftForm();
+      saveAppState();
+      renderParentGiftList();
+      renderGiftShowcase();
+    }
+
+    function deleteTask(id) {
+      if (confirm('确定要删除这项打卡任务吗？')) {
+        const kid = appState.kids[appState.currentKid];
+        const delTask = kid.tasks.find(t => t.id === id);
+        recordAuditLog('task_delete', '家长特权', \`删除【\${kid.name}】的任务【\${delTask ? delTask.title : id}】\`, '已从该孩子的打卡清单中永久移除');
+        kid.tasks = kid.tasks.filter(t => t.id !== id);
+        saveAppState();
+        renderParentTaskList();
+        renderTodayTasks();
+      }
+    }
+
+    // ================= 月份平滑切换 (无阻断) =================
+    function changeCalMonth(offset) {
+      appState.currentMonth += offset;
+      if (appState.currentMonth > 11) {
+        appState.currentMonth = 0;
+        appState.currentYear += 1;
+      } else if (appState.currentMonth < 0) {
+        appState.currentMonth = 11;
+        appState.currentYear -= 1;
+      }
+      document.getElementById('cal-month-title').innerText = \`\${appState.currentYear}年 \${appState.currentMonth + 1}月\`;
+      appState.selectedCalDay = 1;
+      renderCalendar();
+    }
+
+    // 启动初始渲染与Cloudflare Pages 边缘 KV 连接
+    document.getElementById('cal-month-title').innerText = \`\${currentYearVal}年 \${currentMonthVal + 1}月\`;
+    renderTodayTasks();
+    pullFromCloudflareKV();
+
+    // 生产级：每 30 秒后台静默同步一次云端最新打卡（跨设备无感同步）
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        pullFromCloudflareKV();
+      }
+    }, 30000);
+  </script>
+
+    <!-- ================= 独立弹窗：家长操作与安全审计日志 ================= -->
+    <div id="audit-log-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 hidden">
+      <div class="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        <!-- 弹窗顶栏 -->
+        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div>
+            <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+              <i class="fa-solid fa-clock-rotate-left text-indigo-600"></i> 家长操作审计日志
+            </h3>
+            <span class="text-xs text-slate-400">完整追溯打卡、补卡、心愿与任务增删改历史</span>
+          </div>
+          <button onclick="closeAuditLogModal()" class="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center hover:bg-slate-300 transition">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- 筛选与清空工具栏 -->
+        <div class="p-3 border-b border-slate-100 bg-white flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1 text-[11px] overflow-x-auto py-0.5">
+            <button onclick="filterAuditLogs('all')" id="log-filter-all" class="log-filter-btn px-2.5 py-1 rounded-lg font-bold bg-indigo-50 text-indigo-600">全部</button>
+            <button onclick="filterAuditLogs('checkin')" id="log-filter-checkin" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">打卡/补卡</button>
+            <button onclick="filterAuditLogs('task')" id="log-filter-task" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">任务变更</button>
+            <button onclick="filterAuditLogs('gift')" id="log-filter-gift" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">心愿宝箱</button>
+          </div>
+          <button onclick="clearAuditLogs()" class="text-[11px] text-rose-500 hover:text-rose-700 font-medium px-2 py-1 rounded-lg hover:bg-rose-50 transition shrink-0" title="清空审计日志">
+            <i class="fa-solid fa-trash-can"></i> 清空
+          </button>
+        </div>
+
+        <!-- 审计日志列表内容 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-2.5 bg-slate-50/50" id="audit-log-list">
+          <!-- 动态渲染日志卡片 -->
+        </div>
+
+        <!-- 弹窗底栏 -->
+        <div class="p-3 border-t border-slate-100 bg-white">
+          <button onclick="closeAuditLogModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition">
+            关闭审计日志
+          </button>
+        </div>
+
+      </div>
+    </div>
+  
+</body>
+</html>
+`;

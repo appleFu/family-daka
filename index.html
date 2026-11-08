@@ -71,31 +71,37 @@
   <!-- 模拟 iPhone 视口容器 (手机全屏，PC端精致外壳) -->
   <div class="w-full max-w-md h-[100dvh] sm:h-[870px] bg-slate-50 sm:rounded-[44px] shadow-2xl flex flex-col overflow-hidden relative border-0 sm:border-8 sm:border-slate-800">
     
-    <!-- 顶部状态栏 -->
-    <div class="safe-top bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-5 pt-3 pb-3 shadow-md relative z-10">
-      <div class="flex justify-between items-center mb-3">
-        <div>
-          <div class="flex items-center gap-1.5 text-xs text-blue-100">
-            <span id="cloud-pulse-dot" class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span id="cloud-sync-status">云端已同步</span>
-            <span>•</span>
-            <span id="current-date-text">--月--日 周-</span>
-          </div>
-          <h1 class="text-base font-bold mt-0.5 flex items-center gap-1.5">
-            <span>🌟 宝贝成长自律打卡</span>
-          </h1>
+        <!-- 顶部状态栏 -->
+    <div class="safe-top bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-4 pt-3 pb-3 shadow-md relative z-10">
+      
+      <!-- 顶栏微小信息行：日期与云端状态分居两侧，绝不折行拥挤 -->
+      <div class="flex items-center justify-between text-[11px] text-white/80 pb-1.5 mb-1.5 border-b border-white/10">
+        <div class="flex items-center gap-1.5 font-medium tracking-wide">
+          <i class="fa-regular fa-calendar text-[10px] opacity-75"></i>
+          <span id="current-date-text">--月--日 周-</span>
         </div>
+        <div class="flex items-center gap-1.5 text-[10px] bg-black/20 px-2 py-0.5 rounded-full backdrop-blur-xs font-medium">
+          <span id="cloud-pulse-dot" class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="cloud-sync-status">云端已同步</span>
+        </div>
+      </div>
+
+      <!-- 顶栏主要标题与操作按钮：强制 whitespace-nowrap 不换行折行 -->
+      <div class="flex justify-between items-center mb-2.5 gap-2">
+        <h1 class="text-base font-extrabold tracking-tight flex items-center gap-1.5 whitespace-nowrap">
+          <span>🌟 宝贝成长自律打卡</span>
+        </h1>
         
         <!-- 家长权限动态按钮组 -->
-        <div class="flex items-center gap-1.5" id="parent-btn-group">
-          <button id="parent-auth-btn" onclick="openPinModal()" class="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 backdrop-blur-md px-3 py-1.5 rounded-full transition font-medium">
+        <div class="flex items-center gap-1.5 shrink-0" id="parent-btn-group">
+          <button id="parent-auth-btn" onclick="openPinModal()" class="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 backdrop-blur-md active:scale-95 px-3 py-1.5 rounded-full transition font-semibold whitespace-nowrap shrink-0">
             <i class="fa-solid fa-lock"></i>
             <span>家长模式</span>
           </button>
         </div>
       </div>
 
-      <!-- 孩子切换标签 (大宝 / 二宝) -->
+      <!-- 孩子切换标签 (付成蹊 / 付天曜) -->
       <div class="grid grid-cols-2 gap-2 p-1 bg-black/20 rounded-2xl backdrop-blur-md">
         <button id="kid-btn-1" onclick="switchKid(1)" class="flex items-center justify-center gap-2 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all bg-white text-indigo-700 shadow-sm">
           <span class="text-base">👦</span>
@@ -205,6 +211,25 @@
           <!-- 动态渲染今日生效任务 -->
         </div>
 
+        <!-- 家长专享：今日打卡底部操作审计日志入口 -->
+        <div id="parent-audit-log-bottom-btn-today" class="pt-2 pb-2 hidden">
+          <button onclick="openAuditLogModal()" class="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl shadow-sm transition flex items-center justify-between text-xs font-bold border border-slate-700/50">
+            <div class="flex items-center gap-2.5">
+              <span class="w-7 h-7 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center text-sm">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+              </span>
+              <div class="text-left">
+                <div class="text-white">查看家长操作审计日志</div>
+                <div class="text-[10px] text-slate-400 font-normal">追溯打卡、补卡、任务与宝箱增删改历史</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 text-slate-300 text-[11px]">
+              <span id="audit-log-count-badge-today" class="bg-indigo-500 text-white font-bold px-2 py-0.5 rounded-full text-[10px]">0 条</span>
+              <i class="fa-solid fa-chevron-right text-[10px]"></i>
+            </div>
+          </button>
+        </div>
+
       </div>
 
       <!-- ================= 视图 2：打卡日历 (星星历史与补卡) ================= -->
@@ -261,6 +286,25 @@
           <div class="space-y-2" id="detail-list">
             <!-- 渲染选定日期的打卡明细 -->
           </div>
+
+        <!-- 家长专享：日历底部操作审计日志入口 -->
+        <div id="parent-audit-log-bottom-btn-cal" class="pt-2 pb-2 hidden">
+          <button onclick="openAuditLogModal()" class="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl shadow-sm transition flex items-center justify-between text-xs font-bold border border-slate-700/50">
+            <div class="flex items-center gap-2.5">
+              <span class="w-7 h-7 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center text-sm">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+              </span>
+              <div class="text-left">
+                <div class="text-white">查看家长操作审计日志</div>
+                <div class="text-[10px] text-slate-400 font-normal">追溯打卡、补卡、任务与宝箱增删改历史</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 text-slate-300 text-[11px]">
+              <span id="audit-log-count-badge-cal" class="bg-indigo-500 text-white font-bold px-2 py-0.5 rounded-full text-[10px]">0 条</span>
+              <i class="fa-solid fa-chevron-right text-[10px]"></i>
+            </div>
+          </button>
+        </div>
         </div>
       </div>
 
@@ -336,9 +380,9 @@
         <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
           <div>
             <h3 class="font-bold text-slate-800 text-base flex items-center gap-1.5">
-              <i class="fa-solid fa-gear text-indigo-600"></i> 家长管理面板
+              <i class="fa-solid fa-gear text-indigo-600"></i> 家长项目设置
             </h3>
-            <span class="text-xs text-slate-400" id="parent-current-kid-text">管理孩子的任务与心愿</span>
+            <span class="text-xs text-slate-400" id="parent-current-kid-text">管理【付成蹊 (哥哥)】的任务与心愿</span>
           </div>
           <button onclick="closeParentModal()" class="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center hover:bg-slate-300">
             <i class="fa-solid fa-xmark"></i>
@@ -464,8 +508,14 @@
 
         </div>
 
+        
         <!-- 弹窗底栏 -->
-        <div class="p-3 border-t border-slate-100 bg-white flex justify-end gap-2">
+        <div class="p-3 border-t border-slate-100 bg-white flex flex-col gap-2">
+          <button type="button" onclick="openAuditLogModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-clock-rotate-left text-indigo-600"></i>
+            <span>查看家长操作审计日志</span>
+            <span id="audit-log-count-badge-modal" class="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full">0</span>
+          </button>
           <button onclick="closeParentModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700">
             完成并保存设置
           </button>
@@ -516,7 +566,7 @@
       },
             kids: {
         1: {
-          name: "大宝 (哥哥)",
+          name: "付成蹊 (哥哥)",
           stars: 0,
           wish: "乐高机械组积木套装",
           targetStars: 30,
@@ -529,7 +579,7 @@
           history: {}
         },
         2: {
-          name: "二宝 (弟弟)",
+          name: "付天曜 (弟弟)",
           stars: 0,
           wish: "变形金刚大黄蜂玩具",
           targetStars: 25,
@@ -630,11 +680,12 @@
           localStorage.setItem('daka_family_state', JSON.stringify(appState));
           renderTodayTasks();
           if (appState.currentNav === 'calendar') renderCalendar();
-          updateCloudStatus('online', '云端已同步 (Cloudflare Pages)');
+      recordAuditLog('cal_checkin', '家长特权', `在日历${isDone ? '补卡' : '取消'}【${kid.name}】的【${task.title}】`, `日期：${dateStr}，调整后总星数：${kid.stars}颗`);
+          updateCloudStatus('online', '云端已同步');
         } else {
           // 云端尚无记录，初始化上传第一份
           await pushToCloudflareKV();
-          updateCloudStatus('online', '云端已同步 (Cloudflare Pages)');
+          updateCloudStatus('online', '云端已同步');
         }
       } catch (err) {
         // 本地环境或离线时，优雅退回本地 LocalStorage，绝不影响使用
@@ -659,7 +710,7 @@
         });
 
         if (res.ok) {
-          updateCloudStatus('online', '云端已同步 (Cloudflare Pages)');
+          updateCloudStatus('online', '云端已同步');
         } else {
           updateCloudStatus('offline', '本地暂存');
         }
@@ -890,6 +941,7 @@
 
         kid.history[todayStr].stars = kid.tasks.filter(t => t.doneToday).length;
 
+        recordAuditLog('checkin', `${kid.name} (孩子端)`, `打卡完成【${task.title}】`, `今日打卡已锁定，星星 +1，当前累计 ${kid.stars} 颗`);
         closeCheckinConfirm();
         saveAppState();
         renderTodayTasks();
@@ -1183,6 +1235,7 @@
         updateParentUi();
         renderCalendar();
         showToast('家长模式已解锁 (可补卡)', '🔓');
+        recordAuditLog('auth', '家长端', '解锁家长特权模式', '输入 4 位 PIN 码验证通过，进入管理面板');
       } else {
         input.classList.add('border-rose-500');
         if (errTip) errTip.classList.remove('hidden');
@@ -1227,26 +1280,218 @@
     // ================= 家长管理面板逻辑 (支持编辑/修改/新增/删除) =================
     function openParentModal() {
       const kid = appState.kids[appState.currentKid];
-      document.getElementById('parent-current-kid-text').innerText = `管理【${kid.name}】的任务、心愿与成就宝箱`;
-      document.getElementById('input-wish-name').value = kid.wish;
-      document.getElementById('input-wish-target').value = kid.targetStars;
+      const kidText = document.getElementById('parent-current-kid-text');
+      if (kidText) kidText.innerText = `管理【${kid.name}】的任务、心愿与成就宝箱`;
+      const wishName = document.getElementById('input-wish-name');
+      if (wishName) wishName.value = kid.wish;
+      const wishTarget = document.getElementById('input-wish-target');
+      if (wishTarget) wishTarget.value = kid.targetStars;
       if (typeof checkDbStatus === 'function') checkDbStatus();
       hideTaskForm();
       hideGiftForm();
       renderParentTaskList();
       renderParentGiftList();
+      updateAuditBadge();
       document.getElementById('parent-modal').classList.remove('hidden');
+    }
+
+    function openAuditLogModal() {
+      renderAuditLogs();
+      updateAuditBadge();
+      document.getElementById('audit-log-modal').classList.remove('hidden');
+    }
+
+    function closeAuditLogModal() {
+      document.getElementById('audit-log-modal').classList.add('hidden');
     }
 
     function closeParentModal() {
       const kid = appState.kids[appState.currentKid];
-      kid.wish = document.getElementById('input-wish-name').value.trim() || '心愿奖励';
+      const oldWish = kid.wish;
+      const oldTarget = kid.targetStars;
+      const newWish = document.getElementById('input-wish-name').value.trim() || '心愿奖励';
+      const newTarget = parseInt(document.getElementById('input-wish-target').value) || 30;
+      if (oldWish !== newWish || oldTarget !== newTarget) {
+        recordAuditLog('wish_edit', '家长特权', `修改【${kid.name}】的心愿与目标`, `心愿由【${oldWish}】变更为【${newWish}】，目标星数由【${oldTarget}星】变为【${newTarget}星】`);
+      }
+      kid.wish = newWish;
+      kid.targetStars = newTarget;
       kid.targetStars = parseInt(document.getElementById('input-wish-target').value) || 30;
       saveAppState();
       renderStarProgress();
       document.getElementById('parent-modal').classList.add('hidden');
     }
 
+    
+    // ================= 家长操作与安全审计日志系统 =================
+    let currentLogFilter = 'all';
+
+    function formatLogTime() {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function recordAuditLog(type, operator, title, detail) {
+      if (!appState.auditLogs) appState.auditLogs = [];
+      const logItem = {
+        id: 'log_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+        time: formatLogTime(),
+        type: type, // 'checkin', 'cal_checkin', 'task_add', 'task_edit', 'task_delete', 'gift_add', 'gift_edit', 'gift_delete', 'wish_edit', 'auth'
+        operator: operator,
+        title: title,
+        detail: detail
+      };
+      appState.auditLogs.unshift(logItem);
+      if (appState.auditLogs.length > 200) {
+        appState.auditLogs = appState.auditLogs.slice(0, 200);
+      }
+      updateAuditBadge();
+      if (typeof saveAppState === 'function') saveAppState();
+      if (typeof savePrototypeState === 'function') savePrototypeState();
+    }
+
+    function updateAuditBadge() {
+      const count = (appState.auditLogs || []).length;
+      const countStr = count > 99 ? '99+' : count;
+      ['audit-log-count-badge-today', 'audit-log-count-badge-cal', 'audit-log-count-badge-modal', 'audit-log-badge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = id.includes('today') || id.includes('cal') ? countStr + ' 条' : countStr;
+      });
+    }
+
+    function switchParentTab(tabName) {
+      const settingsPanel = document.getElementById('panel-parent-settings');
+      const logsPanel = document.getElementById('panel-parent-logs');
+      const btnSettings = document.getElementById('tab-btn-settings');
+      const btnLogs = document.getElementById('tab-btn-logs');
+
+      if (tabName === 'logs') {
+        settingsPanel.classList.add('hidden');
+        logsPanel.classList.remove('hidden');
+        btnLogs.className = "pb-2 text-xs font-bold border-b-2 border-indigo-600 text-indigo-600 transition flex items-center gap-1.5";
+        btnSettings.className = "pb-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition flex items-center gap-1.5";
+        renderAuditLogs();
+      } else {
+        logsPanel.classList.add('hidden');
+        settingsPanel.classList.remove('hidden');
+        btnSettings.className = "pb-2 text-xs font-bold border-b-2 border-indigo-600 text-indigo-600 transition flex items-center gap-1.5";
+        btnLogs.className = "pb-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition flex items-center gap-1.5";
+      }
+    }
+
+    function filterAuditLogs(category) {
+      currentLogFilter = category;
+      document.querySelectorAll('.log-filter-btn').forEach(btn => {
+        btn.className = "log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100";
+      });
+      const activeBtn = document.getElementById('log-filter-' + category);
+      if (activeBtn) activeBtn.className = "log-filter-btn px-2.5 py-1 rounded-lg font-bold bg-indigo-50 text-indigo-600";
+      renderAuditLogs();
+    }
+
+    function clearAuditLogs() {
+      if (confirm('确定要清空所有的操作审计历史日志吗？清空后不可恢复。')) {
+        appState.auditLogs = [];
+        updateAuditBadge();
+        renderAuditLogs();
+        if (typeof saveAppState === 'function') saveAppState();
+        if (typeof savePrototypeState === 'function') savePrototypeState();
+        showToast('审计日志已清空', '🗑️');
+      }
+    }
+
+    function renderAuditLogs() {
+      const container = document.getElementById('audit-log-list');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const logs = appState.auditLogs || [];
+      const filtered = logs.filter(log => {
+        if (currentLogFilter === 'all') return true;
+        if (currentLogFilter === 'checkin') return log.type === 'checkin' || log.type === 'cal_checkin';
+        if (currentLogFilter === 'task') return log.type.startsWith('task_');
+        if (currentLogFilter === 'gift') return log.type.startsWith('gift_') || log.type === 'wish_edit';
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-slate-100">
+          <i class="fa-solid fa-clipboard-check text-2xl text-slate-300 block mb-2"></i>
+          暂无相关审计日志记录
+        </div>`;
+        return;
+      }
+
+      filtered.forEach(log => {
+        let badgeColor = "bg-slate-100 text-slate-700";
+        let badgeText = "系统";
+        let icon = "fa-circle-info";
+
+        if (log.type === 'checkin') {
+          badgeColor = "bg-emerald-100 text-emerald-800";
+          badgeText = "打卡锁定";
+          icon = "fa-check";
+        } else if (log.type === 'cal_checkin') {
+          badgeColor = "bg-teal-100 text-teal-800";
+          badgeText = "日历补卡";
+          icon = "fa-calendar-check";
+        } else if (log.type === 'task_add') {
+          badgeColor = "bg-blue-100 text-blue-800";
+          badgeText = "新建任务";
+          icon = "fa-plus";
+        } else if (log.type === 'task_edit') {
+          badgeColor = "bg-indigo-100 text-indigo-800";
+          badgeText = "修改任务";
+          icon = "fa-pen-to-square";
+        } else if (log.type === 'task_delete') {
+          badgeColor = "bg-rose-100 text-rose-800";
+          badgeText = "删除任务";
+          icon = "fa-trash";
+        } else if (log.type === 'gift_add') {
+          badgeColor = "bg-amber-100 text-amber-800";
+          badgeText = "补录勋章";
+          icon = "fa-trophy";
+        } else if (log.type === 'gift_edit') {
+          badgeColor = "bg-amber-100 text-amber-800";
+          badgeText = "修改勋章";
+          icon = "fa-medal";
+        } else if (log.type === 'gift_delete') {
+          badgeColor = "bg-rose-100 text-rose-800";
+          badgeText = "删除勋章";
+          icon = "fa-trash-can";
+        } else if (log.type === 'wish_edit') {
+          badgeColor = "bg-purple-100 text-purple-800";
+          badgeText = "调整心愿";
+          icon = "fa-gift";
+        } else if (log.type === 'auth') {
+          badgeColor = "bg-slate-200 text-slate-700";
+          badgeText = "特权解锁";
+          icon = "fa-shield-halved";
+        }
+
+        const div = document.createElement('div');
+        div.className = "p-3 bg-white border border-slate-200/80 rounded-2xl space-y-1.5 shadow-2xs text-xs";
+        div.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${badgeColor}">
+                <i class="fa-solid ${icon}"></i> ${badgeText}
+              </span>
+              <span class="font-bold text-slate-800">${log.title}</span>
+            </div>
+            <span class="text-[10px] text-slate-400 font-mono">${log.time.slice(5)}</span>
+          </div>
+          <p class="text-[11px] text-slate-500 pl-1 leading-snug">${log.detail}</p>
+          <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
+            <span>操作主体：<b class="text-slate-700 font-medium">${log.operator}</b></span>
+            <span class="font-mono text-[9px] text-slate-300">#${log.id.slice(-6)}</span>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+    }
+  
     function renderParentTaskList() {
       const kid = appState.kids[appState.currentKid];
       const listContainer = document.getElementById('parent-task-list');
@@ -1370,6 +1615,7 @@
         });
       }
 
+      recordAuditLog(editingId ? 'task_edit' : 'task_add', '家长特权', `${editingId ? '修改' : '新建'}【${kid.name}】的任务【${title}】`, `生效周期：${selectedDays.map(d => weekNames[d]).join('、')}，描述：${desc || '日常坚持打卡'}`);
       hideTaskForm();
       saveAppState();
       renderParentTaskList();
@@ -1442,6 +1688,8 @@
     function deleteGift(id) {
       if (confirm('确定要从宝箱中删除这个礼物勋章吗？')) {
         const kid = appState.kids[appState.currentKid];
+        const delGift = kid.gifts.find(g => g.id === id);
+        recordAuditLog('gift_delete', '家长特权', `删除【${kid.name}】的宝箱勋章【${delGift ? delGift.name : id}】`, '勋章已从荣誉成就宝箱中移出');
         kid.gifts = kid.gifts.filter(g => g.id !== id);
         saveAppState();
         renderParentGiftList();
@@ -1483,6 +1731,7 @@
         showToast('已成功补录心愿礼物！', '🎉');
       }
 
+      recordAuditLog(editId ? 'gift_edit' : 'gift_add', '家长特权', `${editId ? '修改' : '补录'}【${kid.name}】的心愿勋章【${name}】`, `兑换日期：${date}，勋章已存入宝箱`);
       hideGiftForm();
       saveAppState();
       renderParentGiftList();
@@ -1492,6 +1741,8 @@
     function deleteTask(id) {
       if (confirm('确定要删除这项打卡任务吗？')) {
         const kid = appState.kids[appState.currentKid];
+        const delTask = kid.tasks.find(t => t.id === id);
+        recordAuditLog('task_delete', '家长特权', `删除【${kid.name}】的任务【${delTask ? delTask.title : id}】`, '已从该孩子的打卡清单中永久移除');
         kid.tasks = kid.tasks.filter(t => t.id !== id);
         saveAppState();
         renderParentTaskList();
@@ -1526,5 +1777,51 @@
       }
     }, 30000);
   </script>
+
+    <!-- ================= 独立弹窗：家长操作与安全审计日志 ================= -->
+    <div id="audit-log-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 hidden">
+      <div class="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        <!-- 弹窗顶栏 -->
+        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div>
+            <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+              <i class="fa-solid fa-clock-rotate-left text-indigo-600"></i> 家长操作审计日志
+            </h3>
+            <span class="text-xs text-slate-400">完整追溯打卡、补卡、心愿与任务增删改历史</span>
+          </div>
+          <button onclick="closeAuditLogModal()" class="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center hover:bg-slate-300 transition">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- 筛选与清空工具栏 -->
+        <div class="p-3 border-b border-slate-100 bg-white flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1 text-[11px] overflow-x-auto py-0.5">
+            <button onclick="filterAuditLogs('all')" id="log-filter-all" class="log-filter-btn px-2.5 py-1 rounded-lg font-bold bg-indigo-50 text-indigo-600">全部</button>
+            <button onclick="filterAuditLogs('checkin')" id="log-filter-checkin" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">打卡/补卡</button>
+            <button onclick="filterAuditLogs('task')" id="log-filter-task" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">任务变更</button>
+            <button onclick="filterAuditLogs('gift')" id="log-filter-gift" class="log-filter-btn px-2.5 py-1 rounded-lg font-medium text-slate-500 hover:bg-slate-100">心愿宝箱</button>
+          </div>
+          <button onclick="clearAuditLogs()" class="text-[11px] text-rose-500 hover:text-rose-700 font-medium px-2 py-1 rounded-lg hover:bg-rose-50 transition shrink-0" title="清空审计日志">
+            <i class="fa-solid fa-trash-can"></i> 清空
+          </button>
+        </div>
+
+        <!-- 审计日志列表内容 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-2.5 bg-slate-50/50" id="audit-log-list">
+          <!-- 动态渲染日志卡片 -->
+        </div>
+
+        <!-- 弹窗底栏 -->
+        <div class="p-3 border-t border-slate-100 bg-white">
+          <button onclick="closeAuditLogModal()" class="w-full py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition">
+            关闭审计日志
+          </button>
+        </div>
+
+      </div>
+    </div>
+  
 </body>
 </html>

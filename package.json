@@ -1,0 +1,8 @@
+{
+  "name": "family-clockin-cloudflare",
+  "version": "1.0.0",
+  "description": "Cloudflare 全托管家庭打卡应用本地快速预览",
+  "scripts": {
+    "start": "node preview.js"
+  }
+}
