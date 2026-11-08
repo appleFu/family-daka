@@ -750,7 +750,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
           localStorage.setItem('daka_family_state', JSON.stringify(appState));
           renderTodayTasks();
           if (appState.currentNav === 'calendar') renderCalendar();
-      recordAuditLog('cal_checkin', '家长特权', \`在日历\${isDone ? '补卡' : '取消'}【\${kid.name}】的【\${task.title}】\`, \`日期：\${dateStr}，调整后总星数：\${kid.stars}颗\`);
           updateCloudStatus('online', '云端已同步');
         } else {
           // 云端尚无记录，初始化上传第一份
@@ -1273,6 +1272,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
         kid.stars += 1;
       }
 
+      const isDone = idx === -1;
+      recordAuditLog('cal_checkin', '家长特权', \`在日历\${isDone ? '补卡' : '取消'}【\${kid.name}】的【\${taskTitle}】\`, \`日期：\${dateStr}，调整后总星数：\${kid.stars}颗\`);
       saveAppState();
       renderCalendar();
       renderTodayTasks();
